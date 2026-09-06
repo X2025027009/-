@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "envId": "chengdu-cat-dog-d5f79cft65d26bed",
+  "functionRoot": "functions",
+  "functions": [
+    {
+      "name": "yard-api",
+      "timeout": 15,
+      "memorySize": 256,
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "description": "成都猫狗小院：宠物档案、领养申请、后台管理接口",
+      "envVariables": {
+        "ADMIN_UIDS": "",
+        "WECOM_WEBHOOK": "",
+        "CAPTCHA_SECRET_ID": "",
+        "CAPTCHA_SECRET_KEY": ""
+      }
+    }
+  ]
+}
