@@ -10,6 +10,7 @@
       "runtime": "Nodejs20.19",
       "handler": "index.main",
       "description": "成都猫狗小院：宠物档案、领养申请、后台管理接口",
+
       "envVariables": {
         "ADMIN_UIDS": "",
         "WECOM_WEBHOOK": "",

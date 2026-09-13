@@ -2,9 +2,17 @@ const crypto = require('node:crypto');
 const cloudbase = require('@cloudbase/node-sdk');
 
 const app = cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV });
+const db = app.rdb({ database: 'public' });
 const allowedStatuses = new Set(['未处理', '沟通中', '已通过', '已登记', '等待宠物开放', '已通知', '已转为正式领养申请', '暂不考虑']);
 const allowedPetStatuses = new Set(['待领养', '已领养', '暂不适合领养']);
-const mediaTypes = new Set(['image', 'video']);
+const allowedPetTypes = new Set(['猫咪', '狗狗']);
+const allowedGenders = new Set(['公', '母']);
+const allowedApplicantGenders = new Set(['女', '男', '不方便说明']);
+const allowedExperience = new Set(['有', '没有', '正在了解']);
+const allowedFamilyAgreement = new Set(['全部同意', '部分同意', '尚未沟通']);
+const allowedOtherPets = new Set(['没有', '有猫', '有狗', '有其他宠物']);
+// 群提醒里附带的网站地址，便于管理员一键打开后台；可用环境变量 SITE_URL 覆盖。
+const SITE_URL = text(process.env.SITE_URL, 300) || 'https://chengdu-cat-dog-d5f79cft65d26bed-1470251683.tcloudbaseapp.com/';
 
 function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
@@ -18,20 +26,12 @@ function normalizeContact(value) {
 function hash(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
 }
-function parseRows(result) {
-  const data = result?.data ?? result ?? {};
-  const rows = data.Rows || data.rows || data.records || [];
-  return rows.map(row => {
-    if (typeof row === 'string') {
-      try { return JSON.parse(row); } catch { return { value: row }; }
-    }
-    return row;
-  });
-}
-async function sql(statement, params = {}) {
-  const normalizedStatement = String(statement).trim().replace(/;$/, '');
-  const response = await app.models.$runSQL(normalizedStatement, params);
-  return { response, rows: parseRows(response) };
+function rows(result, operation = '数据库操作') {
+  if (result?.error) {
+    const message = result.error.message || result.error.error || String(result.error);
+    throw new Error(`${operation}失败：${message}`);
+  }
+  return Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : [];
 }
 function contextInfo(context) {
   const info = cloudbase.getCloudbaseContext(context);
@@ -40,6 +40,20 @@ function contextInfo(context) {
     ip: info.WX_CLIENTIP || info.TCB_SOURCE_IP || '',
     source: info.TCB_SOURCE || ''
   };
+}
+/**
+ * 构造限频键。
+ *
+ * 注意 includeIp 的用途：IP 不参与「10 分钟快速限频」，只参与「24 小时每日上限」。
+ * 原因是同一出口 IP（办公室、校园网、运营商 NAT）后面可能是完全不同的访客，
+ * 用 IP 做 10 分钟硬限频会误伤正常申请人；而每日上限保留 IP 仍然拦得住刷屏。
+ */
+function applicationRateKeys({ ip, browserToken, contactNormalized }, includeIp = true) {
+  const keys = [];
+  if (includeIp && ip) keys.push(`ip:${hash(ip)}`);
+  if (browserToken) keys.push(`browser:${hash(browserToken)}`);
+  if (contactNormalized) keys.push(`contact:${hash(contactNormalized)}`);
+  return [...new Set(keys)];
 }
 function configuredAdmins() {
   return new Set(text(process.env.ADMIN_UIDS, 1000).split(',').map(item => item.trim()).filter(Boolean));
@@ -50,168 +64,448 @@ async function requireAdmin(context) {
   const configured = configuredAdmins();
   if (configured.size && !configured.has(uid)) throw new Error('当前账号没有管理员权限。');
   if (!configured.size) {
-    const { rows } = await sql('SELECT auth_uid FROM public.yard_administrators WHERE auth_uid = :uid AND active = TRUE', { uid });
-    if (!rows.length) throw new Error('当前账号没有管理员权限。');
+    const result = await db.from('yard_administrators').select('auth_uid').eq('auth_uid', uid).eq('active', true).limit(1);
+    if (!rows(result, '管理员身份检查').length) throw new Error('当前账号没有管理员权限。');
   }
   return uid;
 }
-async function notifyWeCom(application) {
-  const webhook = text(process.env.WECOM_WEBHOOK, 500);
-  if (!webhook) return { sent: false, reason: 'WECOM_WEBHOOK 尚未配置' };
-  const payload = {
-    msgtype: 'markdown',
-    markdown: {
-      content: `**成都猫狗小院 · 新申请提醒**\n> 宠物：${application.pet_name}\n> 类型：${application.application_type}\n> 提交时间：${application.submitted_at}\n> 请登录管理员后台查看完整资料。`
-    }
-  };
+/**
+ * 解析企业微信机器人地址。
+ *
+ * 优先级：云函数环境变量 WECOM_WEBHOOK > 数据库 yard_settings 的 wecom_webhook。
+ * 环境变量适合临时覆盖；长期配置建议在管理员后台填写——
+ * 这样换机器人时不必重新部署，地址也不会落到任何代码或配置文件里。
+ */
+async function resolveWeComWebhook(secret) {
+  const fromEnv = text(process.env.WECOM_WEBHOOK, 500);
+  if (fromEnv) return fromEnv;
+  try {
+    const response = await executePgSql("SELECT jsonb_build_object('url', COALESCE((SELECT value->>'url' FROM public.yard_settings WHERE key='wecom_webhook' LIMIT 1), '')) AS result", secret);
+    return text(sqlResult(response)?.url, 500);
+  } catch (error) {
+    console.error('读取企业微信机器人地址失败：', error.message);
+    return '';
+  }
+}
+/** 把时间转成北京时间，方便群里直接读。 */
+function beijingTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return text(value, 40);
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  }).format(date);
+}
+/** 统计同一只宠物已收到多少份申请；失败不影响提醒发送。 */
+async function countPetApplications(petId, secret) {
+  if (!petId) return 0;
+  try {
+    const response = await executePgSql(`SELECT jsonb_build_object('n', (SELECT count(*) FROM public.applications WHERE pet_id=${sqlLiteral(petId)})) AS result`, secret);
+    return Number(sqlResult(response)?.n) || 0;
+  } catch (error) {
+    console.error('统计同宠物申请数失败：', error.message);
+    return 0;
+  }
+}
+/**
+ * 生成一行「字段：值」。
+ *
+ * 消息使用**纯文本**（msgtype: text）而不是 markdown：实测微信插件
+ * （在普通微信里接收企业微信消息）**不渲染 markdown**，只会显示
+ * 一行「暂不支持此消息类型」；换成纯文本后两个客户端都能正常看到内容。
+ * 换行会压成空格，避免长备注撑散排版。
+ */
+function wecomLine(label, value, empty = '（未填写）') {
+  const flat = text(value, 200).replace(/\s*\n+\s*/g, ' ');
+  return `${label}：${flat || empty}`;
+}
+/** 按 UTF-8 字节数截断，避免超出企业微信纯文本 2048 字节的上限。 */
+function truncateUtf8(value, maxBytes) {
+  const buffer = Buffer.from(String(value), 'utf8');
+  if (buffer.length <= maxBytes) return String(value);
+  const cut = buffer.subarray(0, maxBytes).toString('utf8').replace(/\uFFFD+$/, '');
+  return `${cut}\n…（内容过长已截断，完整资料请打开管理员后台查看）`;
+}
+/**
+ * 组装群提醒内容。
+ *
+ * 注意：这里按网站负责人的**明确要求**发送完整申请资料（含姓名与联系方式），
+ * 与 BUG.md 第 5 节原本的「最小信息」要求不同，是负责人知情后自行承担的选择。
+ * 仍然刻意不发送：管理员内部备注、来源 IP 哈希、浏览器指纹哈希、修改令牌。
+ */
+function buildWeComContent(application, petApplicationCount) {
+  const lines = [
+    '成都猫狗小院 · 有新申请',
+    `宠物：${text(application.pet_name, 40) || '未知'}`,
+    `类型：${text(application.application_type, 20)}`,
+    `时间：${beijingTime(application.submitted_at)}`,
+    `申请编号：${text(application.id, 80)}`,
+    '',
+    '—— 申请人资料 ——',
+    wecomLine('姓名', application.applicant_name),
+    wecomLine('年龄 / 性别', `${Number(application.applicant_age) || '?'} 岁 / ${text(application.applicant_gender, 20) || '未填写'}`),
+    wecomLine('联系方式', application.contact),
+    wecomLine('成都及周边有住所', application.has_chengdu_home ? '是' : '否'),
+    wecomLine('养宠经验', application.experience),
+    wecomLine('家庭成员意见', application.family_agreement),
+    wecomLine('现有宠物', application.other_pets),
+    wecomLine('补充说明', application.note, '（申请人未填写）')
+  ];
+  if (petApplicationCount > 1) lines.push('', `（这已经是该宠物收到的第 ${petApplicationCount} 份申请）`);
+  lines.push('', `打开管理员后台：${SITE_URL}`);
+  return truncateUtf8(lines.join('\n'), 1800);
+}
+async function notifyWeCom(application, secret) {
+  const webhook = await resolveWeComWebhook(secret);
+  if (!webhook) return { sent: false, skipped: true, reason: '企业微信机器人地址尚未配置' };
+  const petApplicationCount = await countPetApplications(application.pet_id, secret);
+  const payload = { msgtype: 'text', text: { content: buildWeComContent(application, petApplicationCount) } };
   const response = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  // 注意：企业微信即使发送失败也会返回 HTTP 200，真正的结果在响应体的 errcode 里。
+  let body = null;
+  try { body = await response.json(); } catch { /* 非 JSON 响应，按下面的状态码判断 */ }
+  if (body && typeof body.errcode === 'number' && body.errcode !== 0) {
+    throw new Error(`企业微信提醒发送失败：${text(body.errmsg, 120) || body.errcode}`);
+  }
   if (!response.ok) throw new Error('企业微信提醒发送失败。');
   return { sent: true };
 }
+/**
+ * 把最近一次提醒的结果记进 yard_settings，供管理员后台直接查看。
+ *
+ * 为什么需要它：云端函数日志服务当前没有开启，如果机器人地址填错，
+ * 管理员在群里只会「什么也收不到」，却没有任何地方能看到原因。
+ */
+async function recordWeComOutcome(secret, sent, reason) {
+  const patch = JSON.stringify({
+    lastOk: sent === true,
+    lastReason: text(reason || '', 200),
+    lastAt: new Date().toISOString()
+  });
+  try {
+    await executePgSql(`INSERT INTO public.yard_settings (key, value, updated_at) VALUES ('wecom_webhook', ${sqlLiteral(patch)}::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = public.yard_settings.value || EXCLUDED.value, updated_at = NOW()`, secret);
+  } catch (error) {
+    console.error('记录企业微信提醒结果失败：', error.message);
+  }
+}
 async function publicBootstrap() {
-  const { rows: pets } = await sql(`
-    SELECT p.*, COALESCE(
-      json_agg(json_build_object(
-        'id', m.id, 'type', m.media_type, 'storagePath', m.storage_path,
-        'externalUrl', m.external_url, 'caption', m.caption, 'altText', m.alt_text,
-        'isCover', m.is_cover, 'sortOrder', m.sort_order
-      ) ORDER BY m.is_cover DESC, m.sort_order ASC, m.created_at ASC)
-      FILTER (WHERE m.id IS NOT NULL AND m.is_public = TRUE), '[]'::json
-    ) AS media
-    FROM public.pets p
-    LEFT JOIN public.pet_media m ON m.pet_id = p.id
-    WHERE p.is_published = TRUE
-    GROUP BY p.id
-    ORDER BY p.updated_at DESC
-  `);
-  const { rows: settings } = await sql(`SELECT key, value FROM public.yard_settings WHERE key IN ('public_contact','application_policy')`);
-  return { pets, settings: Object.fromEntries(settings.map(item => [item.key, item.value])) };
+  const [petResult, mediaResult, updateResult, settingsResult] = await Promise.all([
+    db.from('pets').select('*').eq('is_published', true).order('updated_at', { ascending: false }).limit(200),
+    db.from('pet_media').select('*').eq('is_public', true).order('sort_order', { ascending: true }).limit(1000),
+    db.from('pet_updates').select('*').order('update_date', { ascending: false }).limit(1000),
+    db.from('yard_settings').select('key,value').in('key', ['public_contact', 'application_policy']).limit(20)
+  ]);
+  const pets = rows(petResult, '读取宠物资料');
+  const media = rows(mediaResult, '读取宠物影像');
+  const updates = rows(updateResult, '读取回访档案');
+  const settings = rows(settingsResult, '读取网站设置');
+  return {
+    pets: pets.map(pet => ({
+      ...pet,
+      media: media.filter(item => item.pet_id === pet.id).map(item => ({
+        id: item.id,
+        type: item.media_type,
+        storagePath: item.storage_path,
+        externalUrl: item.external_url,
+        caption: item.caption,
+        altText: item.alt_text,
+        isCover: item.is_cover,
+        sortOrder: item.sort_order
+      })),
+      updates: updates.filter(item => item.pet_id === pet.id)
+    })),
+    settings: Object.fromEntries(settings.map(item => [item.key, item.value]))
+  };
+}
+function sqlLiteral(value) {
+  if (value === null || value === undefined) return 'NULL';
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+function sqlTextArray(values) {
+  return `ARRAY[${values.map(sqlLiteral).join(',')}]::TEXT[]`;
+}
+function tc3Date(timestamp) {
+  const d = new Date(timestamp * 1000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+function hmacSha256(key, value) {
+  return crypto.createHmac('sha256', key).update(value).digest();
+}
+/**
+ * 解析可用于腾讯云 OpenAPI（ExecutePGSql）TC3 签名的临时凭证。
+ * 优先使用云函数运行时上下文里的临时密钥，其次尝试云厂商元数据服务。
+ */
+async function resolveSecret() {
+  const info = cloudbase.getCloudbaseContext();
+  if (info.TENCENTCLOUD_SECRETID && info.TENCENTCLOUD_SECRETKEY) {
+    return {
+      source: 'context',
+      secretId: info.TENCENTCLOUD_SECRETID,
+      secretKey: info.TENCENTCLOUD_SECRETKEY,
+      sessionToken: info.TENCENTCLOUD_SESSIONTOKEN || ''
+    };
+  }
+  const roleName = process.env.ROLE_NAME || 'TCB_QcsRole';
+  try {
+    const response = await fetch(`http://metadata.tencentyun.com/latest/meta-data/cam/security-credentials/${roleName}`, { signal: AbortSignal.timeout(1500) });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload?.TmpSecretId && payload?.TmpSecretKey) {
+        return { source: 'metadata', secretId: payload.TmpSecretId, secretKey: payload.TmpSecretKey, sessionToken: payload.Token || '' };
+      }
+    }
+  } catch { /* 元数据不可用时交给调用方统一报错 */ }
+  return null;
+}
+/**
+ * 通过腾讯云 OpenAPI ExecutePGSql 执行一段 SQL。
+ *
+ * 签名方式与 CloudBase CLI 内部调用 tcb.tencentcloudapi.com 的实现保持一致，
+ * 这是能正常工作的参考实现。两个关键点：
+ *   1. 只把 content-type 和 host 纳入签名；
+ *   2. 临时凭证的 Token 必须放在 X-TC-Token 请求头里。
+ * 之前的实现把 Token 追加到 Authorization 上、并签了多个额外请求头，
+ * 服务端因此无法解析临时 SecretId，报 “The SecretId is not found”，
+ * 导致所有申请提交都失败。
+ */
+async function executePgSql(sql, secret) {
+  const credentials = secret || await resolveSecret();
+  const { secretId, secretKey, sessionToken } = credentials || {};
+  const envId = process.env.TCB_ENV || process.env.SCF_NAMESPACE;
+  if (!secretId || !secretKey || !envId) throw new Error('申请服务暂不可用，请稍后再试。');
+  const service = 'tcb';
+  const host = 'tcb.tencentcloudapi.com';
+  const path = '/';
+  const method = 'POST';
+  const region = process.env.TENCENTCLOUD_REGION || process.env.TCB_REGION || 'ap-shanghai';
+  const body = JSON.stringify({ EnvId: envId, Sql: sql });
+  const timestamp = Math.floor(Date.now() / 1000);
+  const date = tc3Date(timestamp);
+  const canonicalHeaders = `content-type:application/json\nhost:${host}\n`;
+  const signedHeaders = 'content-type;host';
+  const canonicalRequest = `${method}\n${path}\n\n${canonicalHeaders}\n${signedHeaders}\n${sha256Hex(body)}`;
+  const stringToSign = `TC3-HMAC-SHA256\n${timestamp}\n${date}/${service}/tc3_request\n${sha256Hex(canonicalRequest)}`;
+  const kDate = hmacSha256(`TC3${secretKey}`, date);
+  const kService = hmacSha256(kDate, service);
+  const kSigning = hmacSha256(kService, 'tc3_request');
+  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+  const headers = {
+    Authorization: `TC3-HMAC-SHA256 Credential=${secretId}/${date}/${service}/tc3_request, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    'Content-Type': 'application/json',
+    Host: host,
+    'X-TC-Action': 'ExecutePGSql',
+    'X-TC-Region': region,
+    'X-TC-Timestamp': String(timestamp),
+    'X-TC-Version': '2018-06-08'
+  };
+  if (sessionToken) headers['X-TC-Token'] = sessionToken;
+  const response = await fetch(`https://${host}${path}`, { method, headers, body });
+  const result = await response.json();
+  if (!response.ok || result?.Response?.Error) throw new Error(result?.Response?.Error?.Message || '申请服务暂不可用，请稍后再试。');
+  return result.Response;
+}
+function sqlResult(response) {
+  if (!Array.isArray(response?.Rows) || !response.Rows.length) throw new Error('申请服务暂不可用，请稍后再试。');
+  const row = JSON.parse(response.Rows[0]);
+  const value = Array.isArray(row) ? row[0] : row;
+  return typeof value === 'string' ? JSON.parse(value) : value;
+}
+async function submitApplicationRecord(payload, secret) {
+  const rateKeys = sqlTextArray(payload.rateKeys);
+  const recentRateKeys = sqlTextArray(payload.recentRateKeys);
+  const rateValues = payload.rateEventIds.map((eventId, index) => `(${sqlLiteral(eventId)},${sqlLiteral(payload.rateKeys[index])})`).join(',');
+  const sql = `WITH locked AS (SELECT pg_advisory_xact_lock(hashtext('yard-api-submit:' || key_hash)) FROM unnest(${rateKeys}) AS key_hash), ready AS (SELECT count(*) FROM locked), pet AS (SELECT id,name,adoption_status FROM public.pets WHERE id=${sqlLiteral(payload.petId)} AND is_published=TRUE), decision AS (SELECT CASE WHEN EXISTS (SELECT 1 FROM public.applications WHERE pet_id=${sqlLiteral(payload.petId)} AND contact_normalized=${sqlLiteral(payload.contactNormalized)} AND submitted_at>=NOW()-INTERVAL '7 days') THEN '你近期已为这只宠物提交过申请，请等待管理员联系。' WHEN EXISTS (SELECT 1 FROM public.rate_limit_events WHERE event_kind='application_submit' AND key_hash=ANY(${recentRateKeys}) AND created_at>=NOW()-INTERVAL '10 minutes') THEN '提交过于频繁，请十分钟后再试。' WHEN EXISTS (SELECT 1 FROM public.rate_limit_events WHERE event_kind='application_submit' AND key_hash=ANY(${rateKeys}) AND created_at>=NOW()-INTERVAL '24 hours' GROUP BY key_hash HAVING count(*)>=3) THEN '今天的提交次数已达到上限，请明天再试。' WHEN pet.id IS NULL THEN '找不到这只宠物，请刷新页面后重试。' WHEN ${sqlLiteral(payload.applicationType)}='正式领养申请' AND pet.adoption_status<>'待领养' THEN '这只宠物目前不开放正式领养。' WHEN ${sqlLiteral(payload.applicationType)}='预约申请' AND pet.adoption_status<>'暂不适合领养' THEN '这只宠物目前无需预约。' ELSE NULL END AS message,pet.name FROM ready LEFT JOIN pet ON TRUE), new_application AS (INSERT INTO public.applications (id,pet_id,application_type,applicant_name,applicant_age,applicant_gender,contact,contact_normalized,has_chengdu_home,experience,family_agreement,other_pets,note,internal_status,source_ip_hash,browser_token_hash,submitted_at,edit_token_hash,edit_token_expires_at) SELECT ${sqlLiteral(payload.applicationId)},${sqlLiteral(payload.petId)},${sqlLiteral(payload.applicationType)},${sqlLiteral(payload.applicantName)},${Number(payload.applicantAge)},${sqlLiteral(payload.applicantGender)},${sqlLiteral(payload.contact)},${sqlLiteral(payload.contactNormalized)},${payload.hasChengduHome ? 'TRUE' : 'FALSE'},${sqlLiteral(payload.experience)},${sqlLiteral(payload.familyAgreement)},${sqlLiteral(payload.otherPets)},NULLIF(${sqlLiteral(payload.note)},''),CASE WHEN ${sqlLiteral(payload.applicationType)}='预约申请' THEN '已登记' ELSE '未处理' END,NULLIF(${sqlLiteral(payload.sourceIpHash)},''),NULLIF(${sqlLiteral(payload.browserTokenHash)},''),to_timestamp(${Number(payload.submittedAtMs)}/1000.0),NULLIF(${sqlLiteral(payload.editTokenHash)},''),to_timestamp(${Number(payload.editTokenExpiresAtMs)}/1000.0) FROM decision WHERE message IS NULL RETURNING id), new_rates AS (INSERT INTO public.rate_limit_events (id,event_kind,key_hash) SELECT event_id,'application_submit',key_hash FROM (VALUES ${rateValues}) AS item(event_id,key_hash) CROSS JOIN new_application), new_event AS (INSERT INTO public.application_events (id,application_id,event_type,actor_uid,detail) SELECT ${sqlLiteral(payload.eventId)},${sqlLiteral(payload.applicationId)},'submitted',NULLIF(${sqlLiteral(payload.actorUid)},''),jsonb_build_object('applicationType',${sqlLiteral(payload.applicationType)}) FROM new_application) SELECT CASE WHEN message IS NULL THEN jsonb_build_object('ok',true,'applicationId',${sqlLiteral(payload.applicationId)},'petName',name) ELSE jsonb_build_object('ok',false,'message',message) END AS result FROM decision`;
+  return sqlResult(await executePgSql(sql, secret));
 }
 async function submitApplication(event, context) {
   if (text(event.website, 50)) throw new Error('提交未通过验证。');
   const startedAt = Number(event.formStartedAt || 0);
-  if (startedAt && Date.now() - startedAt < 2500) throw new Error('请稍后再提交。');
+  const elapsed = Date.now() - startedAt;
+  if (!Number.isFinite(startedAt) || startedAt <= 0 || elapsed < 2500 || elapsed > 24 * 60 * 60 * 1000) throw new Error('请重新填写后再提交。');
   const kind = text(event.applicationType, 30);
   if (!['正式领养申请', '预约申请'].includes(kind)) throw new Error('申请类型无效。');
+  const { applicantName, age, gender, contact, contactNormalized, experience, familyAgreement, otherPets } = applicantFields(event);
+  const { uid, ip } = contextInfo(context);
+  const browserToken = text(event.browserToken, 180);
+  const ipHash = ip ? hash(ip) : '';
+  const browserHash = browserToken ? hash(browserToken) : '';
+  const rateKeys = applicationRateKeys({ ip, browserToken, contactNormalized });
+  const recentRateKeys = applicationRateKeys({ browserToken, contactNormalized }, false);
+  if (!rateKeys.length) throw new Error('无法验证提交来源，请刷新页面后重试。');
+  const petId = text(event.petId, 100);
+  const submittedAtMs = Date.now();
+  const applicationId = id('application');
+  const eventId = id('event');
+  const rateEventIds = rateKeys.map(() => id('rate'));
+  // 修改令牌：明文只在这次响应里返回给提交申请的浏览器，数据库只保存哈希，24 小时有效。
+  const editToken = crypto.randomBytes(32).toString('base64url');
+  const editTokenHash = hash(editToken);
+  const editTokenExpiresAtMs = submittedAtMs + 24 * 60 * 60 * 1000;
+  const secret = await resolveSecret();
+  const result = await submitApplicationRecord({
+    applicationId,
+    eventId,
+    rateEventIds,
+    rateKeys,
+    recentRateKeys,
+    petId,
+    applicationType: kind,
+    applicantName,
+    applicantAge: age,
+    applicantGender: gender,
+    contact,
+    contactNormalized,
+    hasChengduHome: event.hasChengduHome,
+    experience,
+    familyAgreement,
+    otherPets,
+    note: text(event.note, 1000),
+    sourceIpHash: ipHash,
+    browserTokenHash: browserHash,
+    actorUid: uid || '',
+    submittedAtMs,
+    editTokenHash,
+    editTokenExpiresAtMs
+  }, secret);
+  if (!result?.ok) throw new Error(result?.message || '申请提交失败，请稍后再试。');
+  const application = {
+    id: result.applicationId, pet_id: petId, pet_name: result.petName || '', application_type: kind,
+    submitted_at: new Date(submittedAtMs).toISOString(),
+    applicant_name: applicantName, applicant_age: age, applicant_gender: gender,
+    contact, has_chengdu_home: event.hasChengduHome, experience,
+    family_agreement: familyAgreement, other_pets: otherPets, note: text(event.note, 1000)
+  };
+  let notification = { sent: false };
+  let notifyReason = '';
+  try {
+    notification = await notifyWeCom(application, secret);
+    notifyReason = notification.reason || '已发送';
+  } catch (error) {
+    // 详细原因只记录给管理员看；返回给访客的提示保持通用，不暴露内部细节。
+    console.error(error);
+    notifyReason = error.message;
+    notification = { sent: false, reason: '提醒未送达，但申请已保存。' };
+  }
+  if (!notification.skipped) await recordWeComOutcome(secret, notification.sent, notifyReason);
+  return { ok: true, applicationId: application.id, editToken, editTokenExpiresAt: new Date(editTokenExpiresAtMs).toISOString(), notification };
+}
+/**
+ * 申请人可自行修改的字段（白名单）。
+ * 明确不包含：意向宠物 pet_id、申请类型 application_type、内部状态 internal_status、
+ * 管理员备注 internal_note、以及任何令牌字段。
+ */
+const EDITABLE_COLUMNS = ['applicant_name', 'applicant_age', 'applicant_gender', 'contact', 'contact_normalized', 'has_chengdu_home', 'experience', 'family_agreement', 'other_pets', 'note'];
+
+/** 校验并归一化申请资料字段；提交与修改共用，保证两边规则一致。 */
+function applicantFields(event) {
   const applicantName = text(event.name, 40);
   const age = Number(event.age);
   const gender = text(event.gender, 20);
   const contact = text(event.contact, 120);
   const contactNormalized = normalizeContact(contact);
-  if (!applicantName || !contactNormalized || !Number.isInteger(age) || age < 18 || age > 100) throw new Error('请完整填写姓名、年龄和联系方式。');
-  const { uid, ip } = contextInfo(context);
-  const ipHash = ip ? hash(ip) : '';
-  const browserHash = event.browserToken ? hash(text(event.browserToken, 180)) : '';
-  const recentKey = ipHash || browserHash || contactNormalized;
-  const { rows: recent } = await sql(`
-    SELECT COUNT(*)::int AS total FROM public.rate_limit_events
-    WHERE event_kind = 'application_submit' AND key_hash = :keyHash
-      AND created_at > NOW() - INTERVAL '10 minutes'
-  `, { keyHash: recentKey });
-  if (Number(recent[0]?.total || 0) >= 1) throw new Error('提交过于频繁，请十分钟后再试。');
-  const { rows: daily } = await sql(`
-    SELECT COUNT(*)::int AS total FROM public.rate_limit_events
-    WHERE event_kind = 'application_submit' AND key_hash = :keyHash
-      AND created_at > NOW() - INTERVAL '24 hours'
-  `, { keyHash: recentKey });
-  if (Number(daily[0]?.total || 0) >= 3) throw new Error('今天的提交次数已达到上限，请明天再试。');
-  const { rows: duplicated } = await sql(`
-    SELECT id FROM public.applications
-    WHERE pet_id = :petId AND contact_normalized = :contact
-      AND submitted_at > NOW() - INTERVAL '7 days'
-    LIMIT 1
-  `, { petId: text(event.petId, 100), contact: contactNormalized });
-  if (duplicated.length) throw new Error('你近期已为这只宠物提交过申请，请等待管理员联系。');
-  const { rows: petRows } = await sql('SELECT id, name, adoption_status FROM public.pets WHERE id = :id AND is_published = TRUE LIMIT 1', { id: text(event.petId, 100) });
-  const pet = petRows[0];
-  if (!pet) throw new Error('找不到这只宠物，请刷新页面后重试。');
-  if (kind === '正式领养申请' && pet.adoption_status !== '待领养') throw new Error('这只宠物目前不开放正式领养。');
-  if (kind === '预约申请' && pet.adoption_status !== '暂不适合领养') throw new Error('这只宠物目前无需预约。');
-  const application = {
-    id: id('application'), pet_id: pet.id, pet_name: pet.name, application_type: kind,
-    applicant_name: applicantName, applicant_age: age, applicant_gender: gender,
-    contact, contact_normalized: contactNormalized,
-    has_chengdu_home: Boolean(event.hasChengduHome), experience: text(event.experience, 100),
-    family_agreement: text(event.familyAgreement, 100), other_pets: text(event.otherPets, 100),
-    note: text(event.note, 1000), internal_status: kind === '预约申请' ? '已登记' : '未处理',
-    source_ip_hash: ipHash, browser_token_hash: browserHash, submitted_at: new Date().toISOString(), submitter_uid: uid
-  };
-  await sql(`
-    INSERT INTO public.applications (
-      id, pet_id, application_type, applicant_name, applicant_age, applicant_gender,
-      contact, contact_normalized, has_chengdu_home, experience, family_agreement,
-      other_pets, note, internal_status, source_ip_hash, browser_token_hash, submitted_at
-    ) VALUES (
-      :id, :pet_id, :application_type, :applicant_name, :applicant_age, :applicant_gender,
-      :contact, :contact_normalized, :has_chengdu_home, :experience, :family_agreement,
-      :other_pets, :note, :internal_status, :source_ip_hash, :browser_token_hash, :submitted_at
-    )
-  `, application);
-  await sql('INSERT INTO public.rate_limit_events(id, event_kind, key_hash) VALUES (:id, :kind, :keyHash)', { id: id('rate'), kind: 'application_submit', keyHash: recentKey });
-  await sql('INSERT INTO public.application_events(id, application_id, event_type, actor_uid, detail) VALUES (:id, :applicationId, :eventType, :actorUid, :detail)', {
-    id: id('event'), applicationId: application.id, eventType: 'submitted', actorUid: uid || null, detail: JSON.stringify({ applicationType: kind })
-  });
-  let notification = { sent: false };
-  try { notification = await notifyWeCom(application); } catch (error) { console.error(error); notification = { sent: false, reason: '提醒未送达，但申请已保存。' }; }
-  return { ok: true, applicationId: application.id, notification };
+  const experience = text(event.experience, 100);
+  const familyAgreement = text(event.familyAgreement, 100);
+  const otherPets = text(event.otherPets, 100);
+  if (!applicantName || !contactNormalized || !Number.isInteger(age) || age < 18 || age > 100 || !allowedApplicantGenders.has(gender) || typeof event.hasChengduHome !== 'boolean' || !allowedExperience.has(experience) || !allowedFamilyAgreement.has(familyAgreement) || !allowedOtherPets.has(otherPets)) throw new Error('请完整填写申请资料。');
+  return { applicantName, age, gender, contact, contactNormalized, experience, familyAgreement, otherPets, hasChengduHome: event.hasChengduHome, note: text(event.note, 1000) };
+}
+function editTokenHashOf(event) {
+  const token = text(event.token, 200);
+  if (!token) throw new Error('请填写修改令牌。');
+  return hash(token);
+}
+/** 用修改令牌取回自己的申请资料，供修改表单预填。令牌本身就是凭证，无需其它身份。 */
+async function lookupApplication(event, secret) {
+  const tokenHash = editTokenHashOf(event);
+  const sql = `SELECT COALESCE((SELECT jsonb_build_object('ok', TRUE, 'applicationId', id, 'petId', pet_id, 'applicationType', application_type, 'name', applicant_name, 'age', applicant_age, 'gender', applicant_gender, 'contact', contact, 'hasChengduHome', has_chengdu_home, 'experience', experience, 'familyAgreement', family_agreement, 'otherPets', other_pets, 'note', COALESCE(note, ''), 'expiresAt', edit_token_expires_at) FROM public.applications WHERE edit_token_hash = ${sqlLiteral(tokenHash)} AND edit_token_expires_at > NOW() LIMIT 1), jsonb_build_object('ok', FALSE, 'message', '修改令牌无效或已过期，请联系管理员。')) AS result`;
+  return sqlResult(await executePgSql(sql, secret));
+}
+/**
+ * 按令牌就地修改原申请，不新增第二条记录。
+ * 事件日志只记录「改了哪些字段」，不记录任何字段值，避免隐私进入事件表。
+ */
+async function editApplication(event, secret) {
+  const tokenHash = editTokenHashOf(event);
+  const fields = applicantFields(event);
+  const sql = `WITH target AS (SELECT id FROM public.applications WHERE edit_token_hash = ${sqlLiteral(tokenHash)} AND edit_token_expires_at > NOW() LIMIT 1), decision AS (SELECT CASE WHEN EXISTS (SELECT 1 FROM target) THEN NULL ELSE '修改令牌无效或已过期，请联系管理员。' END AS message), updated AS (UPDATE public.applications SET applicant_name=${sqlLiteral(fields.applicantName)},applicant_age=${Number(fields.age)},applicant_gender=${sqlLiteral(fields.gender)},contact=${sqlLiteral(fields.contact)},contact_normalized=${sqlLiteral(fields.contactNormalized)},has_chengdu_home=${fields.hasChengduHome ? 'TRUE' : 'FALSE'},experience=${sqlLiteral(fields.experience)},family_agreement=${sqlLiteral(fields.familyAgreement)},other_pets=${sqlLiteral(fields.otherPets)},note=NULLIF(${sqlLiteral(fields.note)},''),updated_at=NOW() WHERE id IN (SELECT id FROM target) AND (SELECT message FROM decision) IS NULL RETURNING id), ev AS (INSERT INTO public.application_events (id, application_id, event_type, actor_uid, detail) SELECT ${sqlLiteral(id('event'))}, id, 'applicant_updated', NULL, jsonb_build_object('fields', ${sqlLiteral(JSON.stringify(EDITABLE_COLUMNS))}::jsonb) FROM updated) SELECT CASE WHEN (SELECT message FROM decision) IS NULL THEN jsonb_build_object('ok', TRUE, 'applicationId', (SELECT id FROM updated)) ELSE jsonb_build_object('ok', FALSE, 'message', (SELECT message FROM decision)) END AS result`;
+  return sqlResult(await executePgSql(sql, secret));
 }
 async function adminInbox(context) {
   await requireAdmin(context);
-  const { rows } = await sql(`
-    SELECT a.*, p.name AS pet_name
-    FROM public.applications a JOIN public.pets p ON p.id = a.pet_id
-    ORDER BY a.submitted_at DESC LIMIT 200
-  `);
-  return rows;
+  const [applicationResult, petResult] = await Promise.all([
+    db.from('applications').select('*').order('submitted_at', { ascending: false }).limit(200),
+    db.from('pets').select('id,name').limit(500)
+  ]);
+  const pets = new Map(rows(petResult, '读取宠物名称').map(pet => [pet.id, pet.name]));
+  return rows(applicationResult, '读取申请收件箱').map(application => ({ ...application, pet_name: pets.get(application.pet_id) || '' }));
 }
 async function updateApplication(event, context) {
   const uid = await requireAdmin(context);
   const status = text(event.status, 50);
   if (!allowedStatuses.has(status)) throw new Error('无效的申请状态。');
   const applicationId = text(event.applicationId, 120);
-  await sql(`UPDATE public.applications SET internal_status = :status, internal_note = :note, updated_at = NOW(), resolved_at = CASE WHEN :status IN ('已通过','暂不考虑') THEN NOW() ELSE resolved_at END WHERE id = :id`, { id: applicationId, status, note: text(event.note, 2000) });
-  await sql('INSERT INTO public.application_events(id, application_id, event_type, actor_uid, detail) VALUES (:id, :applicationId, :eventType, :actorUid, :detail)', { id: id('event'), applicationId, eventType: 'status_updated', actorUid: uid, detail: JSON.stringify({ status }) });
+  const patch = { internal_status: status, internal_note: text(event.note, 2000), updated_at: new Date().toISOString() };
+  if (['已通过', '暂不考虑'].includes(status)) patch.resolved_at = new Date().toISOString();
+  rows(await db.from('applications').update(patch).eq('id', applicationId), '更新申请状态');
+  rows(await db.from('application_events').insert({ id: id('event'), application_id: applicationId, event_type: 'status_updated', actor_uid: uid, detail: { status } }), '记录状态变更');
   return { ok: true };
 }
 async function adminSavePet(event, context) {
   await requireAdmin(context);
   const pet = event.pet || {};
   const petId = text(pet.id, 100) || id('pet');
-  if (!text(pet.name, 60) || !allowedPetStatuses.has(text(pet.adoptionStatus, 30))) throw new Error('请完整填写宠物名称和状态。');
-  await sql(`
-    INSERT INTO public.pets(id, name, pet_type, adoption_status, gender, age_text, tags, description, health, requirements, pause_reason, is_published)
-    VALUES (:id, :name, :petType, :adoptionStatus, :gender, :ageText, :tags, :description, :health, :requirements, :pauseReason, :isPublished)
-    ON CONFLICT (id) DO UPDATE SET
-      name = EXCLUDED.name, pet_type = EXCLUDED.pet_type, adoption_status = EXCLUDED.adoption_status,
-      gender = EXCLUDED.gender, age_text = EXCLUDED.age_text, tags = EXCLUDED.tags, description = EXCLUDED.description,
-      health = EXCLUDED.health, requirements = EXCLUDED.requirements, pause_reason = EXCLUDED.pause_reason,
-      is_published = EXCLUDED.is_published, updated_at = NOW()
-  `, {
-    id: petId, name: text(pet.name, 60), petType: text(pet.petType, 10), adoptionStatus: text(pet.adoptionStatus, 30),
-    gender: text(pet.gender, 4), ageText: text(pet.ageText, 60), tags: pet.tags || [], description: text(pet.description, 2000),
-    health: text(pet.health, 2000), requirements: text(pet.requirements, 2000), pauseReason: text(pet.pauseReason, 2000) || null,
-    isPublished: pet.isPublished !== false
-  });
+  const petType = text(pet.petType, 10);
+  const adoptionStatus = text(pet.adoptionStatus, 30);
+  const gender = text(pet.gender, 4);
+  if (!text(pet.name, 60) || !allowedPetTypes.has(petType) || !allowedPetStatuses.has(adoptionStatus) || !allowedGenders.has(gender)) throw new Error('请完整填写宠物名称、种类、性别和状态。');
+  rows(await db.from('pets').upsert({
+    id: petId,
+    name: text(pet.name, 60),
+    pet_type: petType,
+    adoption_status: adoptionStatus,
+    gender,
+    age_text: text(pet.ageText, 60),
+    tags: Array.isArray(pet.tags) ? pet.tags.map(item => text(item, 40)).filter(Boolean).slice(0, 20) : [],
+    description: text(pet.description, 2000),
+    health: text(pet.health, 2000),
+    requirements: text(pet.requirements, 2000),
+    pause_reason: text(pet.pauseReason, 2000) || null,
+    is_published: pet.isPublished !== false,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'id' }), '保存宠物档案');
   return { ok: true, petId };
 }
 async function adminSaveSettings(event, context) {
   await requireAdmin(context);
-  await sql(`INSERT INTO public.yard_settings(key, value, updated_at) VALUES (:key, :value, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, { key: text(event.key, 80), value: JSON.stringify(event.value || {}) });
+  const key = text(event.key, 80);
+  if (!['public_contact', 'application_policy'].includes(key)) throw new Error('不允许修改该设置。');
+  rows(await db.from('yard_settings').upsert({ key, value: event.value || {}, updated_at: new Date().toISOString() }, { onConflict: 'key' }), '保存网站设置');
   return { ok: true };
 }
 
 exports.main = async (event = {}, context = {}) => {
   const action = text(event.action, 80);
-  if (action === 'health') return { ok: true, service: 'yard-api', time: new Date().toISOString() };
-  if (action === 'debug.simple') return sql('SELECT id, name FROM public.pets LIMIT 1');
+  if (action === 'health') return { ok: true, service: 'yard-api', database: 'postgresql-rdb', time: new Date().toISOString() };
+  if (action === 'debug.simple') return rows(await db.from('pets').select('id,name').limit(1), '数据库连通性检查');
   if (action === 'public.bootstrap') return publicBootstrap();
-  if (action === 'application.submit') return submitApplication(event, context);
+  if (action === 'application.submit') {
+    try { return await submitApplication(event, context); }
+    catch (error) { return { ok: false, message: text(error.message || '申请提交失败，请稍后重试。', 200) }; }
+  }
+  if (action === 'application.lookup') {
+    try { return await lookupApplication(event, await resolveSecret()); }
+    catch (error) { return { ok: false, message: text(error.message || '修改令牌校验失败，请稍后再试。', 200) }; }
+  }
+  if (action === 'application.edit') {
+    try { return await editApplication(event, await resolveSecret()); }
+    catch (error) { return { ok: false, message: text(error.message || '申请修改失败，请稍后再试。', 200) }; }
+  }
   if (action === 'admin.inbox') return adminInbox(context);
   if (action === 'admin.application.update') return updateApplication(event, context);
   if (action === 'admin.pet.save') return adminSavePet(event, context);
   if (action === 'admin.settings.save') return adminSaveSettings(event, context);
   throw new Error('未知操作。');
 };
-
-
-
