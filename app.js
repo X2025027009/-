@@ -882,7 +882,7 @@ function openAdminLogin(message = '') {
     <div class="form-modal admin-login-modal">
       <div class="form-modal-header"><div><h2 id="modalTitle">管理员登录</h2><p>请输入 CloudBase 用户名和密码。密码只在当前浏览器中使用，不会发送到聊天。</p></div><button class="modal-close" data-close-modal aria-label="关闭登录"><svg viewBox="0 0 24 24" fill="none"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
       ${message ? `<p class="admin-login-error" role="alert">${escapeHtml(message)}</p>` : ''}
-      <form id="adminLoginForm"><div class="field"><label for="adminUsername">用户名</label><input id="adminUsername" name="username" autocomplete="username" required /></div><div class="field"><label for="adminPassword">密码</label><input id="adminPassword" name="password" type="password" autocomplete="current-password" required /></div><p class="form-hint">当前已登记的管理员用户名是 administrator。若您还没有该账号密码，请在 CloudBase 身份认证中设置或重置。</p><button class="button button-primary form-submit" type="submit">登录管理员后台</button></form>
+      <form id="adminLoginForm"><div class="field"><label for="adminUsername">用户名</label><input id="adminUsername" name="username" autocomplete="username" required /></div><div class="field"><label for="adminPassword">密码</label><input id="adminPassword" name="password" type="password" autocomplete="current-password" required /></div><p class="form-hint">请使用小院管理员账号登录。若忘记密码，请在 CloudBase 身份认证中重置。</p><button class="button button-primary form-submit" type="submit">登录管理员后台</button></form>
     </div>`);
 }
 async function getAdminUser() {
@@ -2009,10 +2009,180 @@ $$('#siteNav a').forEach(link => link.addEventListener('click', () => { $('#site
 window.addEventListener('scroll', () => $('.site-header').classList.toggle('scrolled', window.scrollY > 10), { passive: true });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') { if (!$('#modalBackdrop').classList.contains('hidden')) { if (cropState) cancelPhotoCrop(); else closeModal(); } else if (!$('#adminBackdrop').classList.contains('hidden')) closeAdmin(); } });
 
+/* ── AI 领养匹配助手 ──────────────────────────────────────────
+   对接云函数 ai-stream（HTTP 云函数，SSE 流式）。
+   设计要点：
+     1. 密钥不经过前端 —— 前端只调用我们自己的云函数，大模型 Key 存在服务端；
+     2. 流式渲染 —— 用 ReadableStream 逐块解析 SSE，边生成边显示；
+     3. 可中断 —— 用 AbortController，用户点「重新开始」立刻停止；
+     4. 失败不白屏 —— 任何异常都落到一条可读的错误气泡，不影响页面其他功能。 */
+const AI_MATCH_ENDPOINT = 'https://chuanzhibei-d3gvmowp1e63d7f33-1470251683.ap-shanghai.app.tcloudbase.com/ai-stream/chat';
+const MATCH_MAX_TURNS = 8;
+const MATCH_EXAMPLES = [
+  ['和家人同住，白天有人', '我和家人一起住，白天有人在家，有养猫经验，想找一只性格温和的狗狗。'],
+  ['租房，第一次养', '我租房住，房东同意养宠物。平时上班八小时，周末基本在家，之前没养过猫。'],
+  ['家里已有一只猫', '家里已经有一只三岁的猫咪，想再领养一只性格温和、能和人相处的狗狗。']
+];
+const matchState = { messages: [], streaming: false, controller: null };
+
+function matchWelcomeHtml() {
+  const chips = MATCH_EXAMPLES.map(([label, example]) =>
+    `<button type="button" class="match-chip" data-match-example="${escapeHtml(example)}">${escapeHtml(label)}</button>`
+  ).join('');
+  return `<div class="match-welcome" id="matchWelcome">
+      <p>你好，我是小院的 AI 匹配助手。直接说说你的情况就行，也可以先点下面的例子：</p>
+      <div class="match-chips">${chips}</div>
+    </div>`;
+}
+
+function matchElements() {
+  return {
+    thread: $('#matchThread'),
+    form: $('#matchForm'),
+    input: $('#matchInput'),
+    submit: $('#matchSubmit'),
+    reset: $('#matchReset')
+  };
+}
+
+/** 追加一条气泡并滚到底部；返回该元素以便流式更新。 */
+function matchAppend(role, text) {
+  const { thread } = matchElements();
+  if (!thread) return null;
+  $('#matchWelcome')?.remove();
+  const bubble = document.createElement('div');
+  bubble.className = `match-bubble is-${role}`;
+  bubble.textContent = text;
+  thread.appendChild(bubble);
+  thread.scrollTop = thread.scrollHeight;
+  return bubble;
+}
+
+function matchSetBusy(busy) {
+  const { submit, input, reset } = matchElements();
+  if (submit) {
+    submit.disabled = busy;
+    submit.textContent = busy ? '正在思考…' : (matchState.messages.length ? '继续提问' : '开始匹配');
+  }
+  if (input) input.disabled = busy;
+  if (reset && matchState.messages.length) reset.hidden = false;
+}
+
+async function matchAsk(preset) {
+  const { thread, input } = matchElements();
+  if (!thread || matchState.streaming) return;
+
+  const question = String(preset ?? input?.value ?? '').trim();
+  if (!question) { input?.focus(); return; }
+
+  matchState.streaming = true;
+  if (input) input.value = '';
+  matchAppend('user', question);
+  matchState.messages.push({ role: 'user', content: question.slice(0, 600) });
+  matchSetBusy(true);
+
+  const bubble = matchAppend('ai', '');
+  bubble.classList.add('is-pending');
+  let answer = '';
+  let failure = '';
+
+  matchState.controller = new AbortController();
+  try {
+    const response = await fetch(AI_MATCH_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: matchState.messages.slice(-MATCH_MAX_TURNS) }),
+      signal: matchState.controller.signal
+    });
+    if (!response.ok || !response.body) throw new Error(`AI 服务暂时不可用（${response.status}）`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        const line = part.split('\n').find(item => item.startsWith('data:'));
+        if (!line) continue;
+        let payload;
+        try { payload = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (payload.type === 'delta' && payload.text) {
+          answer += payload.text;
+          bubble.textContent = answer;
+          thread.scrollTop = thread.scrollHeight;
+        } else if (payload.type === 'error') {
+          failure = payload.message || 'AI 服务暂时不可用。';
+        }
+      }
+    }
+
+    bubble.classList.remove('is-pending');
+    if (answer) {
+      matchState.messages.push({ role: 'assistant', content: answer });
+    } else {
+      bubble.classList.add('is-error');
+      bubble.textContent = failure || 'AI 这次没有给出回复，请再试一次。';
+    }
+  } catch (error) {
+    bubble.classList.remove('is-pending');
+    bubble.classList.add('is-error');
+    bubble.textContent = error?.name === 'AbortError'
+      ? '已停止这次回答。'
+      : (error?.message || 'AI 服务暂时不可用，请稍后再试。');
+  } finally {
+    matchState.streaming = false;
+    matchState.controller = null;
+    matchSetBusy(false);
+    input?.focus();
+  }
+}
+
+function resetMatchAssistant() {
+  const { thread, reset } = matchElements();
+  if (!thread) return;
+  matchState.controller?.abort();
+  matchState.messages = [];
+  thread.innerHTML = matchWelcomeHtml();
+  if (reset) reset.hidden = true;
+  matchSetBusy(false);
+}
+
+function initMatchAssistant() {
+  const { thread, form, input, reset } = matchElements();
+  if (!thread || !form) return;
+  thread.innerHTML = matchWelcomeHtml();
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    matchAsk();
+  });
+
+  // 例子按钮用事件委托，避免每次重建欢迎语都要重新绑定
+  thread.addEventListener('click', event => {
+    const chip = event.target.closest('[data-match-example]');
+    if (chip) matchAsk(chip.dataset.matchExample);
+  });
+
+  // 回车发送，Shift+回车换行 —— 聊天框的常规预期
+  input?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      matchAsk();
+    }
+  });
+
+  reset?.addEventListener('click', resetMatchAssistant);
+}
+
 async function initializeSite() {
   renderAll();
   renderAdminSyncNotice();
   renderApplicantEditBanner();
+  initMatchAssistant();
   await loadCloudPublicData();
   startFeaturedPetRotation();
 }

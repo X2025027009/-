@@ -28,6 +28,7 @@
 
       <nav class="site-nav" id="siteNav" aria-label="主导航">
         <a href="#pets">寻找伙伴</a>
+        <a href="#match">AI 匹配</a>
         <a href="#how">如何领养</a>
         <a href="#stories">回访档案</a>
         <a href="#about">关于小院</a>
@@ -102,6 +103,36 @@
         <div class="empty-state hidden" id="emptyState">
           <strong>暂时没有符合条件的小动物</strong>
           <p>换一个筛选条件再看看吧。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section match-section" id="match">
+      <div class="container">
+        <div class="section-heading split-heading">
+          <div>
+            <p class="section-note">不确定哪一只更适合你</p>
+            <h2>先聊一聊，<br />再决定申请谁</h2>
+          </div>
+          <p>说说你的居住情况、平时在不在家、家里人的想法。AI 会结合小院的在册档案给出建议，也会提醒你容易忽略的地方。</p>
+        </div>
+
+        <div class="match-panel">
+          <div class="match-thread" id="matchThread" aria-live="polite" aria-label="AI 领养匹配对话"></div>
+
+          <form class="match-form" id="matchForm">
+            <label class="match-label" for="matchInput">描述你的情况</label>
+            <textarea id="matchInput" name="message" rows="2" maxlength="600" placeholder="例如：我和家人一起住，白天有人在家，有养猫经验，想找一只性格温和的狗狗。" required></textarea>
+            <div class="match-actions">
+              <button class="button button-primary" type="submit" id="matchSubmit">开始匹配</button>
+              <button class="button button-ghost" type="button" id="matchReset" hidden>重新开始</button>
+            </div>
+          </form>
+
+          <p class="match-disclaimer">
+            AI 建议仅供参考，最终由小院与你沟通后决定。
+            请不要在这里填写身份证号、家庭住址等敏感信息。
+          </p>
         </div>
       </div>
     </section>
@@ -195,7 +226,7 @@
 
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
 
-  <script>window.YARD_CLOUD_CONFIG = { env: 'chengdu-cat-dog-d5f79cft65d26bed', region: 'ap-shanghai', accessKey: 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImEzMzEwNzNkLTEyYTctNDIwOS1hYzI4LTgxYTViZDhhMjM5NyJ9.eyJpc3MiOiJodHRwczovL2NoZW5nZHUtY2F0LWRvZy1kNWY3OWNmdDY1ZDI2YmVkLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJjaGVuZ2R1LWNhdC1kb2ctZDVmNzljZnQ2NWQyNmJlZCIsImV4cCI6NDA5MjM2NzYyMiwiaWF0IjoxNzg4Njg0NDIyLCJub25jZSI6Ijh6cWwyWGpBUWZTME51dTdQT0w1bXciLCJhdF9oYXNoIjoiOHpxbDJYakFRZlMwTnV1N1BPTDVtdyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJjaGVuZ2R1LWNhdC1kb2ctZDVmNzljZnQ2NWQyNmJlZCIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.cLpGg_T3vSYUwvT30ZmT6qAVLWaShtSinDVuWtuuN3qFfa3VKBQEomFniT9U1lwNPkBw69gXBpYS4FrTU8xPEpvvQ-gJFWTwA1MRjsfbh36DyLeKf95YnSZ6s7tS234wD8j3LTi9rlWPohNIQvNGHhC_V6jR7BJT5Wb4kkOlzWAr1Sn_x3ubMmim-LPr9Ax3mP60T2MXhXqUTKo97ItbLHjiQOzDnPAcdACbt1mbDX7hg4WJr5Nr7xYGfxJxlGopY-GeDfkCYACpGoBwhWRoybyiK9hwHjrzoOpmd05lSZaeQoy5z0k6GI77a38Yj5vgdJ17ViHqndLJEtvuNkXirA' };</script>
+  <script>window.YARD_CLOUD_CONFIG = { env: 'chuanzhibei-d3gvmowp1e63d7f33', region: 'ap-shanghai', accessKey: 'eyJhbGciOiJSUzI1NiIsImtpZCI6IjVhMjM3YWNlLTIzYmYtNGQwNC1hMDBlLWJkMmU2MzBmMDA3MiJ9.eyJpc3MiOiJodHRwczovL2NodWFuemhpYmVpLWQzZ3Ztb3dwMWU2M2Q3ZjMzLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJjaHVhbnpoaWJlaS1kM2d2bW93cDFlNjNkN2YzMyIsImV4cCI6NDA5NDgwOTAyMywiaWF0IjoxNzkxMTI1ODIzLCJub25jZSI6Il9JXzFpS1JlUmxDYkFlZEFOQkNTTnciLCJhdF9oYXNoIjoiX0lfMWlLUmVSbENiQWVkQU5CQ1NOdyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJjaHVhbnpoaWJlaS1kM2d2bW93cDFlNjNkN2YzMyIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.ZWTbDXg5plFXJyWvsvmwAKT5rP22xNo0SX-ADl2_morcXKmPrWAK3lI3Rdq8UmzsUyq1cZ7y01ISxscYqmNs6FD3p1qMEtRF9zAew7hqp8Jgyar62iULYznr7pxMGP-Z4nJ39J7arFL3G2pH5mAfUpfjNUVIurXMI1-XFcBwVwbWhENHvObY9N5X2TBQQbchfBd0HIDo9JSO0OxgvpuKtw5GvdVPtHDuuBOxuLWgW333KrXHSREkL-k2tMB56hWkRYsO1qXJ1MMS1-YTJNU4GS42FjmqCMwd4RgsbWc1vTQ1AVxq4WTn2ih0rM2Sdaw_T88L3fxPcqhauJ01X4uW6g' };</script>
   <script src="https://static.cloudbase.net/cloudbase-js-sdk/3.9.2/cloudbase.full.js"></script>
   <script src="app.js"></script>
 </body>

@@ -494,3 +494,88 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
   .gallery-stage { min-height: 0; }
   .gallery-thumb { flex-basis: 58px; height: 48px; }
 }
+
+/* ── AI 领养匹配助手 ──────────────────────────────────────────
+   刻意沿用站点既有设计变量：衬线标题、暖黄强调、16px 圆角、柔和阴影。
+   目标是让这个新板块看起来"本来就在"，而不是后期贴上去的。
+   配色只用 --warm-yellow / --pale-yellow / --clay / --sage，不引入新色值。 */
+.match-section { background: linear-gradient(180deg, rgba(255, 240, 200, .45), rgba(251, 248, 239, 0) 62%); }
+
+.match-panel {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--soft-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.match-thread { display: grid; gap: 12px; max-height: 440px; overflow-y: auto; scroll-behavior: smooth; }
+
+.match-welcome p { margin: 0 0 12px; color: var(--muted); font-size: 14px; line-height: 1.75; }
+
+.match-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.match-chip {
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .2s ease, border-color .2s ease, transform .2s ease;
+}
+.match-chip:hover { background: var(--pale-yellow); border-color: rgba(244, 201, 107, .75); transform: translateY(-1px); }
+
+.match-bubble {
+  max-width: min(560px, 90%);
+  padding: 12px 15px;
+  border-radius: 15px;
+  font-size: 14.5px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.match-bubble.is-user { justify-self: end; background: var(--pale-yellow); color: var(--ink); border-bottom-right-radius: 5px; }
+.match-bubble.is-ai { justify-self: start; background: var(--cream); border: 1px solid var(--soft-line); border-bottom-left-radius: 5px; }
+.match-bubble.is-error { justify-self: start; background: #fdf1ec; border: 1px solid rgba(201, 119, 88, .32); color: var(--clay); }
+/* 流式输出时行尾的光标，让「正在生成」这件事可见 */
+.match-bubble.is-pending::after {
+  content: "▍";
+  margin-left: 2px;
+  color: var(--warm-yellow);
+  animation: match-caret 1s steps(2, start) infinite;
+}
+@keyframes match-caret { to { opacity: 0; } }
+
+.match-form { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--soft-line); }
+.match-label { font-size: 13px; font-weight: 800; color: var(--muted); }
+.match-form textarea {
+  width: 100%;
+  min-height: 58px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14.5px;
+  line-height: 1.7;
+  resize: vertical;
+  transition: border-color .2s ease, background .2s ease;
+}
+.match-form textarea:focus { outline: none; border-color: var(--warm-yellow); background: #fff; }
+.match-form textarea:disabled { opacity: .6; }
+.match-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.match-actions .button[disabled] { opacity: .6; cursor: progress; }
+
+.match-disclaimer { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+@media (max-width: 680px) {
+  .match-panel { padding: 16px; }
+  .match-bubble { max-width: 96%; }
+  .match-actions .button { flex: 1; }
+}
+
