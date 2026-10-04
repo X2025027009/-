@@ -514,6 +514,21 @@ async function adminDeleteApplication(event, context) {
   return { ok: true, deleted };
 }
 
+/**
+ * 统一的「可读错误」包装。
+ *
+ * 云函数里直接 throw，返回值会被运行时包成一句
+ * `Function code exception caught (...)`，管理员在后台只会看到这串无意义的编号，
+ * 真实原因（比如「没有找到这条申请」）全被盖住，排查时只能靠猜。
+ *
+ * 因此管理类动作统一改成返回 { ok:false, message }，
+ * 把可读原因送达前端；同时不影响成功路径的返回值。
+ */
+async function asReadableResult(run, fallback) {
+  try { return await run(); }
+  catch (error) { return { ok: false, message: text(error?.message || fallback, 200) }; }
+}
+
 exports.main = async (event = {}, context = {}) => {
   const action = text(event.action, 80);
   if (action === 'health') return { ok: true, service: 'yard-api', database: 'postgresql-rdb', time: new Date().toISOString() };
@@ -531,10 +546,11 @@ exports.main = async (event = {}, context = {}) => {
     try { return await editApplication(event, await resolveSecret()); }
     catch (error) { return { ok: false, message: text(error.message || '申请修改失败，请稍后再试。', 200) }; }
   }
-  if (action === 'admin.inbox') return adminInbox(context);
-  if (action === 'admin.application.update') return updateApplication(event, context);
-  if (action === 'admin.application.delete') return adminDeleteApplication(event, context);
-  if (action === 'admin.pet.save') return adminSavePet(event, context);
-  if (action === 'admin.settings.save') return adminSaveSettings(event, context);
+  // 管理类动作统一走可读错误包装：抛异常会被运行时包成无意义编号，管理员看不到原因。
+  if (action === 'admin.inbox') return asReadableResult(() => adminInbox(context), '读取申请收件箱失败。');
+  if (action === 'admin.application.update') return asReadableResult(() => updateApplication(event, context), '更新申请失败。');
+  if (action === 'admin.application.delete') return asReadableResult(() => adminDeleteApplication(event, context), '删除申请失败。');
+  if (action === 'admin.pet.save') return asReadableResult(() => adminSavePet(event, context), '保存宠物档案失败。');
+  if (action === 'admin.settings.save') return asReadableResult(() => adminSaveSettings(event, context), '保存网站设置失败。');
   throw new Error('未知操作。');
 };
