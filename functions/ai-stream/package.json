@@ -1,0 +1,7 @@
+{
+  "name": "ai-stream",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "description": "SSE 流式验证函数（临时）"
+}
