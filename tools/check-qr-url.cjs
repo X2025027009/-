@@ -1,30 +1,39 @@
 /**
- * 确认「设置里的微信二维码」在新环境下用哪个地址可访问。
+ * 检查站点设置里的微信二维码地址是否真的可访问。
  *
- * 迁移后 wechatQrUrl 里存的还是旧环境域名，旧环境一到期就会 404。
- * 这里对比几个候选地址，找出真正可用的那个，而不是靠猜。
+ * 为什么需要这个：环境迁移后，`yard_settings.public_contact.value.wechatQrUrl`
+ * 里存的是**带环境 ID 的完整地址**。图片文件本身搬过去了，但地址没改的话，
+ * 旧环境一到期二维码就会变成裂图——而且不会报错，只会静默显示不出来。
+ *
+ * 用法：node tools/check-qr-url.cjs
  */
-const OLD_ENV = 'chengdu-cat-dog-d5f79cft65d26bed';
-const NEW_ENV = 'chuanzhibei-d3gvmowp1e63d7f33';
-const KEY = 'settings/wechat-qr/1788766712376-wnfuad-1000022221.jpg';
+const ENV_ID = process.env.YARD_ENV || 'chuanzhibei-d3gvmowp1e63d7f33';
+const BUCKET = 'yard-media';
+const QR_PATH = process.env.QR_PATH || 'settings/wechat-qr/1788766712376-wnfuad-1000022221.jpg';
 
 const candidates = [
-  ['旧环境 gateway', `https://${OLD_ENV}.api.tcloudbasegateway.com/v1/storages/object/public/yard-media/${KEY}`],
-  ['新环境 gateway', `https://${NEW_ENV}.api.tcloudbasegateway.com/v1/storages/object/public/yard-media/${KEY}`],
-  ['新环境 tcb-api', `https://${NEW_ENV}.ap-shanghai.tcb-api.tencentcloudapi.com/v1/storages/object/public/yard-media/${KEY}`],
-  ['新环境 服务域名', `https://${NEW_ENV}.service.tcloudbase.com/v1/storages/object/public/yard-media/${KEY}`],
-  ['新环境 CDN 桶域名', `https://6368-${NEW_ENV}-1470251683.tcb.qcloud.la/${KEY}`]
+  ['存储网关（推荐，与后端写入格式一致）', `https://${ENV_ID}.api.tcloudbasegateway.com/v1/storages/object/public/${BUCKET}/${QR_PATH}`],
+  ['tcb-api 域名', `https://${ENV_ID}.ap-shanghai.tcb-api.tencentcloudapi.com/v1/storages/object/public/${BUCKET}/${QR_PATH}`],
+  ['服务域名', `https://${ENV_ID}.service.tcloudbase.com/v1/storages/object/public/${BUCKET}/${QR_PATH}`]
 ];
 
 (async () => {
+  console.log(`环境：${ENV_ID}\n对象：${QR_PATH}\n`);
+  let reachable = 0;
   for (const [label, url] of candidates) {
     try {
-      const r = await fetch(url, { method: 'GET' });
-      const type = r.headers.get('content-type') || '-';
-      const len = r.headers.get('content-length') || '-';
-      console.log(`  ${r.status}  ${String(type).padEnd(24)} ${String(len).padStart(9)}   ${label}`);
-    } catch (e) {
-      console.log(`  请求失败  ${e.message}   ${label}`);
+      const response = await fetch(url);
+      const type = response.headers.get('content-type') || '-';
+      const size = response.headers.get('content-length') || '-';
+      if (response.ok) reachable += 1;
+      console.log(`  ${String(response.status).padEnd(4)} ${String(type).padEnd(26)} ${String(size).padStart(8)}   ${label}`);
+    } catch (error) {
+      console.log(`  失败  ${error.message}   ${label}`);
     }
+  }
+  console.log(`\n可访问的地址数：${reachable}`);
+  if (!reachable) {
+    console.log('⚠️ 二维码不可访问——检查对象是否已上传到当前环境的桶，以及设置里的地址是否指向当前环境。');
+    process.exit(1);
   }
 })();
