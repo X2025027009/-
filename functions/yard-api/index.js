@@ -65,8 +65,16 @@ async function requireAdmin(context) {
   const configured = configuredAdmins();
   if (configured.size && !configured.has(uid)) throw new Error('当前账号没有管理员权限。');
   if (!configured.size) {
-    const result = await db.from('yard_administrators').select('auth_uid').eq('auth_uid', uid).eq('active', true).limit(1);
-    if (!rows(result, '管理员身份检查').length) throw new Error('当前账号没有管理员权限。');
+    // ⚠️ 必须走 ExecutePGSql 特权通道，不能用 db.from(...)：
+    // 云函数里的 app.rdb() **以匿名身份运行**，而 yard_administrators
+    // 只授权给 authenticated，用它会直接报
+    // 「permission denied for table yard_administrators」，
+    // 导致后台所有管理操作全部失败。
+    const response = await executePgSql(
+      `SELECT jsonb_build_object('n', (SELECT count(*) FROM public.yard_administrators WHERE auth_uid = ${sqlLiteral(uid)} AND active = TRUE)) AS result`,
+      await resolveSecret()
+    );
+    if (!(Number(sqlResult(response)?.n) > 0)) throw new Error('当前账号没有管理员权限。');
   }
   return uid;
 }
@@ -434,24 +442,49 @@ async function editApplication(event, secret) {
   const sql = `WITH target AS (SELECT id FROM public.applications WHERE edit_token_hash = ${sqlLiteral(tokenHash)} AND edit_token_expires_at > NOW() LIMIT 1), decision AS (SELECT CASE WHEN EXISTS (SELECT 1 FROM target) THEN NULL ELSE '修改令牌无效或已过期，请联系管理员。' END AS message), updated AS (UPDATE public.applications SET applicant_name=${sqlLiteral(fields.applicantName)},applicant_age=${Number(fields.age)},applicant_gender=${sqlLiteral(fields.gender)},contact=${sqlLiteral(fields.contact)},contact_normalized=${sqlLiteral(fields.contactNormalized)},has_chengdu_home=${fields.hasChengduHome ? 'TRUE' : 'FALSE'},experience=${sqlLiteral(fields.experience)},family_agreement=${sqlLiteral(fields.familyAgreement)},other_pets=${sqlLiteral(fields.otherPets)},note=NULLIF(${sqlLiteral(fields.note)},''),updated_at=NOW() WHERE id IN (SELECT id FROM target) AND (SELECT message FROM decision) IS NULL RETURNING id), ev AS (INSERT INTO public.application_events (id, application_id, event_type, actor_uid, detail) SELECT ${sqlLiteral(id('event'))}, id, 'applicant_updated', NULL, jsonb_build_object('fields', ${sqlLiteral(JSON.stringify(EDITABLE_COLUMNS))}::jsonb) FROM updated) SELECT CASE WHEN (SELECT message FROM decision) IS NULL THEN jsonb_build_object('ok', TRUE, 'applicationId', (SELECT id FROM updated)) ELSE jsonb_build_object('ok', FALSE, 'message', (SELECT message FROM decision)) END AS result`;
   return sqlResult(await executePgSql(sql, secret));
 }
+/**
+ * 申请收件箱。
+ *
+ * 同样走特权通道：app.rdb() 是匿名身份，读不了 applications / yard_administrators。
+ */
 async function adminInbox(context) {
   await requireAdmin(context);
-  const [applicationResult, petResult] = await Promise.all([
-    db.from('applications').select('*').order('submitted_at', { ascending: false }).limit(200),
-    db.from('pets').select('id,name').limit(500)
-  ]);
-  const pets = new Map(rows(petResult, '读取宠物名称').map(pet => [pet.id, pet.name]));
-  return rows(applicationResult, '读取申请收件箱').map(application => ({ ...application, pet_name: pets.get(application.pet_id) || '' }));
+  const response = await executePgSql(
+    `SELECT jsonb_build_object('rows', COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.submitted_at DESC), '[]'::jsonb)) AS result
+       FROM (
+         SELECT a.*, COALESCE(p.name, '') AS pet_name
+           FROM public.applications a
+           LEFT JOIN public.pets p ON p.id = a.pet_id
+          ORDER BY a.submitted_at DESC
+          LIMIT 200
+       ) t`,
+    await resolveSecret()
+  );
+  const payload = sqlResult(response);
+  return Array.isArray(payload?.rows) ? payload.rows : [];
 }
 async function updateApplication(event, context) {
   const uid = await requireAdmin(context);
   const status = text(event.status, 50);
   if (!allowedStatuses.has(status)) throw new Error('无效的申请状态。');
   const applicationId = text(event.applicationId, 120);
-  const patch = { internal_status: status, internal_note: text(event.note, 2000), updated_at: new Date().toISOString() };
-  if (['已通过', '暂不考虑'].includes(status)) patch.resolved_at = new Date().toISOString();
-  rows(await db.from('applications').update(patch).eq('id', applicationId), '更新申请状态');
-  rows(await db.from('application_events').insert({ id: id('event'), application_id: applicationId, event_type: 'status_updated', actor_uid: uid, detail: { status } }), '记录状态变更');
+  const resolved = ['已通过', '暂不考虑'].includes(status);
+  const sql = `WITH updated AS (
+      UPDATE public.applications
+         SET internal_status = ${sqlLiteral(status)},
+             internal_note = ${sqlLiteral(text(event.note, 2000))},
+             updated_at = NOW()${resolved ? ', resolved_at = NOW()' : ''}
+       WHERE id = ${sqlLiteral(applicationId)}
+       RETURNING id
+    ), ev AS (
+      INSERT INTO public.application_events (id, application_id, event_type, actor_uid, detail)
+      SELECT ${sqlLiteral(id('event'))}, id, 'status_updated', ${sqlLiteral(uid)},
+             jsonb_build_object('status', ${sqlLiteral(status)})
+        FROM updated
+    )
+    SELECT jsonb_build_object('updated', (SELECT count(*) FROM updated)) AS result`;
+  const payload = sqlResult(await executePgSql(sql, await resolveSecret()));
+  if (!(Number(payload?.updated) > 0)) throw new Error('没有找到这条申请，可能已经被删除，请刷新后台后重试。');
   return { ok: true };
 }
 async function adminSavePet(event, context) {
@@ -462,28 +495,40 @@ async function adminSavePet(event, context) {
   const adoptionStatus = text(pet.adoptionStatus, 30);
   const gender = text(pet.gender, 4);
   if (!text(pet.name, 60) || !allowedPetTypes.has(petType) || !allowedPetStatuses.has(adoptionStatus) || !allowedGenders.has(gender)) throw new Error('请完整填写宠物名称、种类、性别和状态。');
-  rows(await db.from('pets').upsert({
-    id: petId,
-    name: text(pet.name, 60),
-    pet_type: petType,
-    adoption_status: adoptionStatus,
-    gender,
-    age_text: text(pet.ageText, 60),
-    tags: Array.isArray(pet.tags) ? pet.tags.map(item => text(item, 40)).filter(Boolean).slice(0, 20) : [],
-    description: text(pet.description, 2000),
-    health: text(pet.health, 2000),
-    requirements: text(pet.requirements, 2000),
-    pause_reason: text(pet.pauseReason, 2000) || null,
-    is_published: pet.isPublished !== false,
-    updated_at: new Date().toISOString()
-  }, { onConflict: 'id' }), '保存宠物档案');
-  return { ok: true, petId };
+  const tags = Array.isArray(pet.tags) ? pet.tags.map(item => text(item, 40)).filter(Boolean).slice(0, 20) : [];
+  const sql = `WITH saved AS (
+      INSERT INTO public.pets (id, name, pet_type, adoption_status, gender, age_text, tags,
+                               description, health, requirements, pause_reason, is_published, updated_at)
+      VALUES (${sqlLiteral(petId)}, ${sqlLiteral(text(pet.name, 60))}, ${sqlLiteral(petType)},
+              ${sqlLiteral(adoptionStatus)}, ${sqlLiteral(gender)}, ${sqlLiteral(text(pet.ageText, 60))},
+              ${sqlTextArray(tags)}, ${sqlLiteral(text(pet.description, 2000))},
+              ${sqlLiteral(text(pet.health, 2000))}, ${sqlLiteral(text(pet.requirements, 2000))},
+              ${pet.pauseReason ? sqlLiteral(text(pet.pauseReason, 2000)) : 'NULL'},
+              ${pet.isPublished !== false ? 'TRUE' : 'FALSE'}, NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name, pet_type = EXCLUDED.pet_type, adoption_status = EXCLUDED.adoption_status,
+        gender = EXCLUDED.gender, age_text = EXCLUDED.age_text, tags = EXCLUDED.tags,
+        description = EXCLUDED.description, health = EXCLUDED.health, requirements = EXCLUDED.requirements,
+        pause_reason = EXCLUDED.pause_reason, is_published = EXCLUDED.is_published, updated_at = NOW()
+      RETURNING id
+    )
+    SELECT jsonb_build_object('id', (SELECT id FROM saved)) AS result`;
+  const payload = sqlResult(await executePgSql(sql, await resolveSecret()));
+  return { ok: true, petId: payload?.id || petId };
 }
 async function adminSaveSettings(event, context) {
   await requireAdmin(context);
   const key = text(event.key, 80);
   if (!['public_contact', 'application_policy'].includes(key)) throw new Error('不允许修改该设置。');
-  rows(await db.from('yard_settings').upsert({ key, value: event.value || {}, updated_at: new Date().toISOString() }, { onConflict: 'key' }), '保存网站设置');
+  const sql = `WITH saved AS (
+      INSERT INTO public.yard_settings (key, value, updated_at)
+      VALUES (${sqlLiteral(key)}, ${sqlLiteral(JSON.stringify(event.value || {}))}::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = public.yard_settings.value || EXCLUDED.value, updated_at = NOW()
+      RETURNING key
+    )
+    SELECT jsonb_build_object('key', (SELECT key FROM saved)) AS result`;
+  sqlResult(await executePgSql(sql, await resolveSecret()));
   return { ok: true };
 }
 
