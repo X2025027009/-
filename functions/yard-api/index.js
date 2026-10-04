@@ -12,7 +12,8 @@ const allowedExperience = new Set(['有', '没有', '正在了解']);
 const allowedFamilyAgreement = new Set(['全部同意', '部分同意', '尚未沟通']);
 const allowedOtherPets = new Set(['没有', '有猫', '有狗', '有其他宠物']);
 // 群提醒里附带的网站地址，便于管理员一键打开后台；可用环境变量 SITE_URL 覆盖。
-const SITE_URL = text(process.env.SITE_URL, 300) || 'https://chengdu-cat-dog-d5f79cft65d26bed-1470251683.tcloudbaseapp.com/';
+// ⚠️ 换环境时这里必须同步更新，否则群提醒里的「打开管理员后台」会指向旧站。
+const SITE_URL = text(process.env.SITE_URL, 300) || 'https://chuanzhibei-d3gvmowp1e63d7f33-1470251683.tcloudbaseapp.com/';
 
 function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;

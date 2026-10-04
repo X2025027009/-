@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
-  "envId": "chengdu-cat-dog-d5f79cft65d26bed",
+  "envId": "chuanzhibei-d3gvmowp1e63d7f33",
   "functionRoot": "functions",
   "functions": [
     {
@@ -17,6 +17,13 @@
         "CAPTCHA_SECRET_ID": "",
         "CAPTCHA_SECRET_KEY": ""
       }
+    },
+    {
+      "name": "ai-stream",
+      "timeout": 60,
+      "memorySize": 256,
+      "runtime": "Nodejs20.19",
+      "description": "AI 流式代理（HTTP 云函数，SSE）。当前为 SSE 可行性验证用的临时函数"
     }
   ]
 }
