@@ -135,6 +135,16 @@ SSE 流式响应只在 HTTP（Web）云函数上支持，因此 AI 代理单独�
 > 2. **云函数安全规则**默认排除匿名用户 → `callFunction` 返回
 >    `EXCEED_AUTHORITY`，表现为**访客点提交申请没反应**
 >
+> 第 2 条的实际默认值是
+> `{"*": {"invoke": "auth != null && auth.loginType != 'ANONYMOUS'"}}`。
+> 控制台入口在「云函数 → 鉴权设置」，不太好找；
+> 也可以用命令行直接查看和修改：
+>
+> ```bash
+> node tools/fn-security-rule.cjs describe   # 查看当前规则
+> node tools/fn-security-rule.cjs apply      # 设为 {"*":{"invoke":true}}
+> ```
+>
 > 安全规则设为 `{"*": {"invoke": true}}` 是安全的：本项目的云函数
 > **在函数内部自己做鉴权**（管理动作走 `requireAdmin`，公开动作有限频与输入校验），
 > 这正是官方文档推荐的「更精细的权限控制在云函数内部实现」。
