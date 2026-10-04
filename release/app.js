@@ -1630,15 +1630,17 @@ async function handleApplicationDelete(id) {
       throw new Error('暂时无法读取云端申请记录，请刷新管理员后台后再删除。');
     }
     if (isCloudInbox) {
-      const result = await cloudDb.from('applications').delete().eq('id', id);
-      if (result?.error) throw new Error(result.error.message || '云端申请删除失败。');
+      // 走云函数的特权通道删除，而不是前端直接删数据库：
+      // 删除不可逆，摆在服务端能明确鉴权，也能确认"确实删掉了"。
+      const result = await callYardApi({ action: 'admin.application.delete', applicationId: id });
+      if (result?.ok !== true) throw new Error(result?.message || '云端申请删除失败。');
       cloudApplications = cloudApplications.filter(item => item.id !== id);
     }
     applications = applications.filter(item => item.id !== id);
     saveApplications();
     renderStats();
     renderAdmin();
-    toast(isCloudInbox ? '申请记录已从云端删除' : '申请记录已从本地删除');
+    toast(isCloudInbox ? '申请记录已删除' : '申请记录已从本地删除');
   } catch (error) {
     toast(error.message || '申请记录删除失败，请稍后重试。');
   }

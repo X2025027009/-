@@ -487,6 +487,33 @@ async function adminSaveSettings(event, context) {
   return { ok: true };
 }
 
+/**
+ * 删除一条申请记录。
+ *
+ * 走云函数的特权通道（ExecutePGSql），而不是让前端直接删数据库。
+ * 理由有两条：
+ *   1. 与后台其它写入（改状态、存宠物、存设置）保持一致，只有删除曾走客户端；
+ *   2. 删除是不可逆操作，摆在服务端能明确鉴权、能校验"确实删掉了"，
+ *      也不会因为客户端的行级策略差异而静默失败。
+ *
+ * 注意：application_events 对 applications 是 ON DELETE CASCADE，会一并清掉。
+ */
+async function adminDeleteApplication(event, context) {
+  await requireAdmin(context);
+  const applicationId = text(event.applicationId, 120);
+  if (!applicationId) throw new Error('缺少要删除的申请编号。');
+  const response = await executePgSql(
+    `WITH removed AS (
+       DELETE FROM public.applications WHERE id = ${sqlLiteral(applicationId)} RETURNING id
+     )
+     SELECT jsonb_build_object('deleted', (SELECT count(*) FROM removed)) AS result`,
+    await resolveSecret()
+  );
+  const deleted = Number(sqlResult(response)?.deleted) || 0;
+  if (!deleted) throw new Error('没有找到这条申请，可能已经被删除，请刷新后台后重试。');
+  return { ok: true, deleted };
+}
+
 exports.main = async (event = {}, context = {}) => {
   const action = text(event.action, 80);
   if (action === 'health') return { ok: true, service: 'yard-api', database: 'postgresql-rdb', time: new Date().toISOString() };
@@ -506,6 +533,7 @@ exports.main = async (event = {}, context = {}) => {
   }
   if (action === 'admin.inbox') return adminInbox(context);
   if (action === 'admin.application.update') return updateApplication(event, context);
+  if (action === 'admin.application.delete') return adminDeleteApplication(event, context);
   if (action === 'admin.pet.save') return adminSavePet(event, context);
   if (action === 'admin.settings.save') return adminSaveSettings(event, context);
   throw new Error('未知操作。');
