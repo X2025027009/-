@@ -573,6 +573,21 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
 
 .match-disclaimer { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 
+/* 演示模式提示：用暖黄底提示，与「这不是真实模型回答」的语义相称，不抢主视觉 */
+.match-mode-hint {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(244, 201, 107, .8);
+  border-radius: 11px;
+  background: var(--pale-yellow);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+/* 管理员后台里 AI Key 的配置状态：已配置用鼠尾草绿，未配置保持中性 */
+.ai-key-status.is-ok { color: var(--sage); }
+
 @media (max-width: 680px) {
   .match-panel { padding: 16px; }
   .match-bubble { max-width: 96%; }

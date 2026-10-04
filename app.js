@@ -99,6 +99,13 @@ let lastEditToken = '';
 let cloudWecomWebhook = '';
 let cloudWecomWebhookLoaded = false;
 let cloudWecomStatus = null;
+/**
+ * AI 模型配置状态。
+ *
+ * 刻意**只保留「是否已配置」和掩码提示**，不在前端状态里留存完整密钥——
+ * 管理员不需要回看它，前端也就没有理由持有它。
+ */
+let cloudAiKey = { loaded: false, configured: false, hint: '' };
 let filters = { status: '待领养', type: '全部' };
 let adminTab = 'overview';
 let adminEditing = null;
@@ -908,24 +915,34 @@ async function loadCloudAdminData() {
   } catch (error) { cloudApplications = null; toast(error.message || '云端申请记录读取失败'); }
 }
 /**
- * 读取只有管理员能看的私密设置（目前是企业微信机器人地址）。
- * 这个 key 不在公开只读策略里，匿名访客读不到，所以只能在登录后单独拉取。
+ * 读取只有管理员能看的私密设置：企业微信机器人地址、AI 模型 API Key。
+ * 这些 key 不在公开只读策略里，匿名访客读不到，只能在登录后单独拉取。
  */
 async function loadAdminPrivateSettings() {
   cloudWecomWebhook = '';
   cloudWecomWebhookLoaded = false;
   cloudWecomStatus = null;
+  cloudAiKey = { loaded: false, configured: false, hint: '' };
   if (!adminAuthUser || !cloudDb) return;
   try {
-    const result = await cloudDb.from('yard_settings').select('key,value').eq('key', 'wecom_webhook').limit(1);
-    const value = cloudRows(result, '读取企业微信设置')[0]?.value || {};
-    cloudWecomWebhook = String(value.url || '');
-    if (typeof value.lastOk === 'boolean') {
-      cloudWecomStatus = { ok: value.lastOk, reason: String(value.lastReason || ''), at: String(value.lastAt || '') };
+    const result = await cloudDb.from('yard_settings').select('key,value').in('key', ['wecom_webhook', 'ai_config']).limit(5);
+    const list = cloudRows(result, '读取管理员私密设置');
+
+    const wecom = list.find(item => item.key === 'wecom_webhook')?.value || {};
+    cloudWecomWebhook = String(wecom.url || '');
+    if (typeof wecom.lastOk === 'boolean') {
+      cloudWecomStatus = { ok: wecom.lastOk, reason: String(wecom.lastReason || ''), at: String(wecom.lastAt || '') };
     }
     cloudWecomWebhookLoaded = true;
+
+    const apiKey = String(list.find(item => item.key === 'ai_config')?.value?.apiKey || '');
+    cloudAiKey = {
+      loaded: true,
+      configured: Boolean(apiKey),
+      hint: apiKey ? `${apiKey.slice(0, 3)}••••••${apiKey.slice(-4)}` : ''
+    };
   } catch (error) {
-    toast(error.message || '企业微信设置读取失败');
+    toast(error.message || '管理员设置读取失败');
   }
 }
 /** 把最近一次企业微信提醒的结果渲染成一行提示，方便管理员自查。 */
@@ -1190,6 +1207,7 @@ function renderAdminSettings() {
         <div class="field full"><label for="wechatQrFile">微信二维码</label><input id="wechatQrFile" type="file" accept="image/jpeg,image/png,image/webp" /><span class="form-hint">支持 JPG、PNG、WebP，单张不超过 8 MB。二维码会在保存网站设置后公开显示。</span>${qrPreview}</div>
         <div class="field full"><label>首页简介</label><textarea name="intro">${escapeHtml(settings.intro)}</textarea></div>
         <div class="field full"><label for="wecomWebhook">企业微信机器人地址</label><input id="wecomWebhook" name="wecomWebhook" value="${escapeHtml(cloudWecomWebhook)}" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." autocomplete="off" /><span class="form-hint">在企业微信群里点「群机器人 → 添加机器人」，把拿到的 Webhook 地址粘贴到这里。保存后，下一位访客提交申请时群里就会收到提醒。提醒只包含宠物、类型和时间，不会发送申请人姓名、电话、住址等隐私。留空表示关闭提醒。</span>${wecomStatusHint()}</div>
+        <div class="field full"><label for="aiApiKey">AI 模型 API Key（DeepSeek）</label><input id="aiApiKey" name="aiApiKey" placeholder="${cloudAiKey.configured ? '如需更换请填入新的 Key，留空表示保持现状' : 'sk-...'}" autocomplete="off" /><span class="form-hint ${cloudAiKey.configured ? 'ai-key-status is-ok' : 'ai-key-status'}">${cloudAiKey.configured ? `已配置（${escapeHtml(cloudAiKey.hint)}）：AI 匹配助手使用真实模型。` : '尚未配置：AI 匹配助手运行在演示模式，回复由内置示例生成，不会调用真实模型。'}出于安全考虑不回显完整密钥，填入新值即视为替换。该密钥只保存在管理员专属设置中，匿名访客读不到，也不会出现在任何前端代码或仓库里。</span></div>
       </div>
       <button class="button button-primary form-submit" type="submit">保存网站设置</button>
     </form>`;
@@ -1349,6 +1367,23 @@ async function saveWeComWebhookToCloud(value) {
   if (result?.error) throw new Error(result.error.message || '企业微信机器人地址保存失败。');
   return true;
 }
+/**
+ * 保存 AI 模型 API Key。
+ *
+ * 同样存在 yard_settings 的管理员专属 key 里（`ai_config`）：
+ * 不进代码、不进仓库、不用重新部署云函数，随时可换。
+ * 云函数 ai-stream 会优先读环境变量，其次读这个值；都没配时走演示模式。
+ */
+async function saveAiConfigToCloud(value) {
+  if (!cloudState.connected || !cloudDb || !adminAuthUser) return false;
+  const result = await cloudDb.from('yard_settings').upsert({
+    key: 'ai_config',
+    value: { apiKey: value, updatedAt: new Date().toISOString() },
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'key' });
+  if (result?.error) throw new Error(result.error.message || 'AI 配置保存失败。');
+  return true;
+}
 async function uploadContactQrToCloud(file) {
   const cloudPath = `settings/wechat-qr/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeCloudFileName(file.name)}`;
   const uploadResult = await cloudMediaBucket.upload(cloudPath, file, { upsert: true, contentType: file.type });
@@ -1382,6 +1417,9 @@ async function saveWebsiteSettings(event) {
   // 只有确实读到过旧值时才允许把地址清空；没读到过就只在管理员填了新地址时才写入，
   // 避免因读取失败而误把已配置好的地址覆盖成空。
   const shouldSaveWebhook = cloudWecomWebhookLoaded ? webhookValue !== cloudWecomWebhook : Boolean(webhookValue);
+  // AI Key 与机器人地址同理：只有确实读到过旧值时才允许清空，避免读取失败误清已配置的密钥。
+  const aiKeyValue = String(new FormData(form).get('aiApiKey') || '').trim();
+  const shouldSaveAiKey = Boolean(aiKeyValue);
   if (qrFile && !validContactQrFile(qrFile)) {
     toast('微信二维码请选择 JPG、PNG 或 WebP 图片，且文件不超过 8 MB。');
     return;
@@ -1418,6 +1456,13 @@ async function saveWebsiteSettings(event) {
       webhookSaved = await saveWeComWebhookToCloud(webhookValue);
       if (webhookSaved) { cloudWecomWebhook = webhookValue; cloudWecomWebhookLoaded = true; }
     }
+    let aiKeySaved = false;
+    if (shouldSaveAiKey) {
+      aiKeySaved = await saveAiConfigToCloud(aiKeyValue);
+      if (aiKeySaved) {
+        cloudAiKey = { loaded: true, configured: true, hint: `${aiKeyValue.slice(0, 3)}••••••${aiKeyValue.slice(-4)}` };
+      }
+    }
     settings = nextSettings;
     saveSettings();
     renderContact();
@@ -1428,6 +1473,10 @@ async function saveWebsiteSettings(event) {
     renderAdmin();
     if (shouldSaveWebhook && !webhookSaved) {
       toast('网站设置已保存，但企业微信机器人地址没能写入云端，请连接云端后重新保存一次。');
+    } else if (shouldSaveAiKey && !aiKeySaved) {
+      toast('网站设置已保存，但 AI 模型 Key 没能写入云端，请连接云端后重新保存一次。');
+    } else if (aiKeySaved) {
+      toast('AI 模型 Key 已保存，下一条提问就会用真实模型回答');
     } else if (webhookSaved && !webhookValue) toast('网站设置已保存，企业微信提醒已关闭');
     else if (webhookSaved) toast('网站设置已保存，企业微信提醒已开启');
     else toast(cloudSaved ? '联系方式和二维码已同步到云端' : '联系方式和二维码已保存到本地');
@@ -2068,6 +2117,21 @@ function matchSetBusy(busy) {
   if (reset && matchState.messages.length) reset.hidden = false;
 }
 
+/**
+ * 显示/隐藏「演示模式」提示。
+ *
+ * 云函数在未配置模型 Key 时会回一条 meta 事件（mock: true），
+ * 此时回复由内置示例生成。必须如实告知访客，不能让人误以为是真实模型回答。
+ */
+function matchSetModeHint(mock) {
+  const hint = $('#matchModeHint');
+  if (!hint) return;
+  hint.hidden = !mock;
+  hint.textContent = mock
+    ? '演示模式：小院尚未配置模型 API Key，以下回复由内置示例生成，未调用真实模型。'
+    : '';
+}
+
 async function matchAsk(preset) {
   const { thread, input } = matchElements();
   if (!thread || matchState.streaming) return;
@@ -2114,6 +2178,8 @@ async function matchAsk(preset) {
           answer += payload.text;
           bubble.textContent = answer;
           thread.scrollTop = thread.scrollHeight;
+        } else if (payload.type === 'meta') {
+          matchSetModeHint(Boolean(payload.mock));
         } else if (payload.type === 'error') {
           failure = payload.message || 'AI 服务暂时不可用。';
         }
