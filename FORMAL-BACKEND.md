@@ -10,7 +10,7 @@
 
 1. 通过 CloudBase CLI 执行 `database/schema.sql`。
 2. 在 CloudBase 身份认证中启用“用户名 + 密码”管理员登录方式。
-3. 创建三名管理员账号，并把对应 UID 写入 `yard_administrators` 表。
+3. 创建管理员账号，并把对应 UID 写入 `yard_administrators` 表。
 4. 配置 `ADMIN_UIDS`、企业微信群机器人 Webhook 和腾讯验证码密钥。
 5. 部署 `yard-api` 云函数。
 6. 发布新版静态站点。

@@ -14,7 +14,7 @@
 
 ## 尚待配置的安全项目
 
-- `ADMIN_UIDS`：三位管理员的 CloudBase 用户 UID。
+- `ADMIN_UIDS`：管理员的 CloudBase 用户 UID。
 - `WECOM_WEBHOOK`：企业微信群机器人地址，必须只配置在云函数环境变量中。
 - 腾讯验证码 SecretId / SecretKey：接入后，申请接口会在服务端执行验证码二次校验。
 - 管理员上传媒体的存储策略和 RLS 权限：需要管理员账号创建完成后写入相应 UID。

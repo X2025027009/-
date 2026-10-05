@@ -1007,7 +1007,7 @@ function renderAdminOverview() {
   const inbox = adminApplications();
   const openApps = inbox.filter(app => app.status === '未处理').length;
   const recent = inbox.slice(0, 4);
-  return `${adminPageHead('今天的小院', '三位管理员拥有相同的编辑与查看权限。')}
+  return `${adminPageHead('今天的小院', '管理员拥有相同的编辑与查看权限。')}
     <div class="dashboard-stats">
       <div class="dashboard-stat"><strong>${waiting}</strong><span>待领养</span></div>
       <div class="dashboard-stat"><strong>${adopted}</strong><span>已领养档案</span></div>
