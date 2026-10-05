@@ -78,9 +78,20 @@ function toolSummary(events) {
   check('已加载工具（≥5）', (health.tools?.count || 0) >= 5, `实际 ${health.tools?.count}`);
   check('工具名符合预期', ['search_pets', 'get_pet_profile', 'get_adoption_policy'].every(n => health.tools?.names?.includes(n)), (health.tools?.names || []).join(','));
 
+  /** 限频会让后续用例连锁失败，看起来像功能坏了。单独识别并说清楚。 */
+  function bailIfRateLimited(result, label) {
+    const hit = result.events.find(e => e.type === 'error' && /频繁/.test(e.message || ''));
+    if (!hit) return;
+    console.log(`\n⚠️  用例「${label}」被限频拦下，本次没有真正测到功能。`);
+    console.log('    限频规则：同一 IP 10 分钟内 15 次、每天 120 次。');
+    console.log('    这不是功能故障 —— 等约 10 分钟再跑即可。');
+    process.exit(2);
+  }
+
   // ── 用例一：只有查政策才能答 ─────────────────────────────
   console.log('\n【1】问政策类问题（不查数据库只能编）');
   const policy = await ask('请问在你们这里领养要收费吗？后续会回访吗？');
+  bailIfRateLimited(policy, '问政策类问题');
   const policyTools = toolSummary(policy.events);
   console.log('     实际调用的工具:', policyTools.names.join(', ') || '（无）');
   console.log('     工具结果摘要:', policyTools.summaries.join(' | ') || '（无）');
@@ -95,6 +106,7 @@ function toolSummary(events) {
   // ── 用例二：只有查档案才能答 ─────────────────────────────
   console.log('\n【2】问档案类问题（必须先查才能知道有哪些）');
   const roster = await ask('小院现在在册的狗狗都有哪些？各自什么年纪？');
+  bailIfRateLimited(roster, '问档案类问题');
   const rosterTools = toolSummary(roster.events);
   console.log('     实际调用的工具:', rosterTools.names.join(', ') || '（无）');
   console.log('     工具结果摘要:', rosterTools.summaries.join(' | ') || '（无）');
@@ -105,6 +117,7 @@ function toolSummary(events) {
   // ── 用例三：多步问题，看是否自主规划 ─────────────────────
   console.log('\n【3】多步问题（需要先查列表、再看细节）');
   const multi = await ask('我想领养一只猫，我租房住，房东同意，白天家里有人。你觉得我适合哪只？');
+  bailIfRateLimited(multi, '多步问题');
   const multiTools = toolSummary(multi.events);
   console.log('     实际调用的工具:', multiTools.names.join(', ') || '（无）');
   console.log('     调用次数:', multiTools.started);

@@ -84,6 +84,16 @@ async function readSse(url, body) {
   check('返回 text/event-stream', chat.contentType.includes('text/event-stream'), chat.contentType);
   check('带正确的 CORS 允许来源', chat.allowOrigin === SITE_ORIGIN, chat.allowOrigin);
 
+  // 限频（同一 IP 10 分钟 15 次）会表现为一串莫名其妙的失败，
+  // 容易让人误以为功能坏了。单独识别出来，给出明确提示。
+  const rateError = chat.events.find(e => e.type === 'error' && /频繁/.test(e.message || ''));
+  if (rateError) {
+    console.log('\n⚠️  被限频拦下了，本次没有真正测到功能。');
+    console.log('    限频规则：同一 IP 10 分钟内 15 次、每天 120 次。');
+    console.log('    这不是功能故障 —— 等约 10 分钟再跑即可。');
+    process.exit(2);
+  }
+
   const meta = chat.events.find(e => e.type === 'meta');
   const deltas = chat.events.filter(e => e.type === 'delta');
   const done = chat.events.find(e => e.type === 'done');
