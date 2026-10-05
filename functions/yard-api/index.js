@@ -942,6 +942,35 @@ async function runReviewAgent(detail, apiKey, secret) {
   return { content: finalReply.content, steps };
 }
 
+/**
+ * 把 AI 摘要写回申请记录。
+ *
+ * 顺带记下生成时这条申请的 updated_at，作为"新鲜度"的判据：
+ * 资料改过之后旧摘要的依据就变了，界面据此提示重新生成。
+ *
+ * 保存失败不影响本次返回——摘要已经算出来了，没理由因为写库失败就不给管理员看。
+ * 返回生成时间；写库失败时返回 null，前端会照常显示但不会标记为"已保存"。
+ */
+async function saveApplicationSummary(applicationId, result, secret) {
+  try {
+    const response = await executePgSql(
+      `WITH updated AS (
+         UPDATE public.applications SET
+           ai_summary = ${sqlLiteral(JSON.stringify(result))}::jsonb,
+           ai_summary_at = NOW(),
+           ai_summary_source_updated_at = updated_at
+         WHERE id = ${sqlLiteral(applicationId)}
+         RETURNING ai_summary_at::text AS saved_at
+       ) SELECT jsonb_build_object('savedAt', (SELECT saved_at FROM updated)) AS result`,
+      secret
+    );
+    return sqlResult(response)?.savedAt || null;
+  } catch (error) {
+    console.error('保存 AI 摘要失败：', error.message);
+    return null;
+  }
+}
+
 async function summarizeApplication(event, context) {
   await requireAdmin(context);
   const applicationId = text(event.applicationId, 120);
@@ -959,7 +988,11 @@ async function summarizeApplication(event, context) {
            'name', p.name, 'type', p.pet_type, 'status', p.adoption_status,
            'age', p.age_text, 'health', p.health, 'requirements', p.requirements),
          'petId', a.pet_id,
-         'contactNormalized', a.contact_normalized
+         'contactNormalized', a.contact_normalized,
+         'cached', a.ai_summary,
+         'cachedAt', a.ai_summary_at::text,
+         'cachedFor', a.ai_summary_source_updated_at::text,
+         'currentUpdatedAt', a.updated_at::text
        )
        FROM public.applications a
        LEFT JOIN public.pets p ON p.id = a.pet_id
@@ -972,6 +1005,20 @@ async function summarizeApplication(event, context) {
   const detail = payload?.applicant ? payload : null;
   if (!detail) throw new Error('没有找到这条申请，可能已经被删除，请刷新后台后重试。');
   const fallbackHeadline = `${text(detail.applicant.name, 20) || '申请人'} · 意向「${text(detail.pet?.name, 20) || '未知'}」`;
+
+  /**
+   * 摘要是要重复看的东西，不能算完就丢。
+   *
+   * 这里先看有没有**仍然新鲜**的旧摘要：申请资料没被改过（updated_at 未变）
+   * 就直接复用，既省下一次模型调用，管理员也不用再等十几秒。
+   * 资料改过之后旧摘要的依据已经变了，必须重新生成，界面也会提示。
+   * 管理员想强制重算时传 force。
+   */
+  const cacheFresh = Boolean(detail.cached)
+    && String(detail.cachedFor || '') === String(detail.currentUpdatedAt || '');
+  if (cacheFresh && event.force !== true) {
+    return { ok: true, cached: true, cachedAt: detail.cachedAt, ...detail.cached };
+  }
 
   const apiKey = await resolveAiKey();
   if (!apiKey) {
@@ -994,8 +1041,7 @@ async function summarizeApplication(event, context) {
     const review = await runReviewAgent(detail, apiKey, secret);
     const parsed = JSON.parse(text(review.content, 4000));
     if (!parsed?.headline) throw new Error('模型返回内容缺少必要字段');
-    return {
-      ok: true,
+    const result = {
       mock: false,
       mode: '由 AI 生成',
       steps: review.steps,
@@ -1008,6 +1054,10 @@ async function summarizeApplication(event, context) {
         caution: text(parsed.caution, 200)
       }
     };
+    // 存下来供下次直接复用。只存真实模型结果——规则兜底的结果本来就便宜，
+    // 存起来反而会让人误以为那是模型结论。
+    const savedAt = await saveApplicationSummary(applicationId, result, secret);
+    return { ok: true, cached: false, cachedAt: savedAt, ...result };
   } catch (error) {
     // 模型失败不能挡住管理员干活：退回规则摘要，并如实说明原因
     return {

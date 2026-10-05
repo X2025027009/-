@@ -93,7 +93,8 @@ for (const note of [...new Set(jwtNotes)]) pass('JWT 已核验为可发布密钥
 const commits = git(['rev-list', '--all']).split('\n').filter(Boolean);
 const historyHits = [];
 for (const commit of commits) {
-  let out = '';
+  // 不设初值：读取失败会 continue，初值永远读不到
+  let out;
   try {
     out = execFileSync('git', ['grep', '-n', '-E',
       'qyapi\\.weixin\\.qq\\.com/cgi-bin/webhook/send\\?key=[A-Za-z0-9-]{8,}|sk-[A-Za-z0-9]{24,}|AKID[A-Za-z0-9]{20,}',

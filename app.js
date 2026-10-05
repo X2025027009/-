@@ -923,7 +923,7 @@ async function loadCloudAdminData() {
   if (!adminAuthUser || !cloudDb) return;
   try {
     const result = await cloudDb.from('applications').select('*').order('submitted_at', { ascending: false }).limit(200);
-    cloudApplications = cloudRows(result, '读取云端申请记录').map(item => ({ ...item, name: item.applicant_name, age: item.applicant_age, gender: item.applicant_gender, petId: item.pet_id, petName: petById(item.pet_id)?.name || '', kind: item.application_type, status: item.internal_status, contact: item.contact, home: item.has_chengdu_home ? '是' : '否', experience: item.experience, family: item.family_agreement, otherPets: item.other_pets, note: item.note, internalNote: item.internal_note || '', createdAt: item.submitted_at }));
+    cloudApplications = cloudRows(result, '读取云端申请记录').map(item => ({ ...item, name: item.applicant_name, age: item.applicant_age, gender: item.applicant_gender, petId: item.pet_id, petName: petById(item.pet_id)?.name || '', kind: item.application_type, status: item.internal_status, contact: item.contact, home: item.has_chengdu_home ? '是' : '否', experience: item.experience, family: item.family_agreement, otherPets: item.other_pets, note: item.note, internalNote: item.internal_note || '', createdAt: item.submitted_at, aiSummary: item.ai_summary || null, aiSummaryAt: item.ai_summary_at || '', aiSummaryStale: Boolean(item.ai_summary) && String(item.ai_summary_source_updated_at || '') !== String(item.updated_at || '') }));
   } catch (error) { cloudApplications = null; toast(error.message || '云端申请记录读取失败'); }
 }
 /**
@@ -1194,10 +1194,11 @@ function renderAdminApplications() {
         <textarea id="application-note-${escapeHtml(app.id)}" name="internalNote" placeholder="例如：已电话沟通，等待家人确认。此内容不会公开。">${escapeHtml(app.internalNote || '')}</textarea>
         <div class="application-action-buttons">
           <button class="admin-primary" type="submit">保存处理结果</button>
-          <button class="admin-edit" type="button" data-summarize-application="${escapeHtml(app.id)}">AI 摘要</button>
+          <button class="admin-edit" type="button" data-summarize-application="${escapeHtml(app.id)}">${app.aiSummary ? '重新生成摘要' : 'AI 摘要'}</button>
           <button class="admin-delete" type="button" data-delete-application="${escapeHtml(app.id)}">删除申请</button>
         </div>
-        <div class="application-ai-summary" data-ai-summary-for="${escapeHtml(app.id)}" hidden></div>
+        <div class="application-ai-summary" data-ai-summary-for="${escapeHtml(app.id)}"${app.aiSummary ? '' : ' hidden'}>${app.aiSummary ? applicationSummaryHtml(app.aiSummary) : ''}</div>
+        ${app.aiSummaryStale ? `<p class="ai-summary-stale" data-ai-summary-stale>申请资料在上次摘要之后有过改动，旧结论的依据已经变了，建议重新生成。</p>` : ''}
       </form>
     </article>`;
   }).join('');
@@ -1659,11 +1660,9 @@ async function handlePetDelete(id) {
  * 呈现上刻意把「核对结果」和「建议追问」分开，并保留一行来源说明
  * （由 AI 生成 / 规则比对 / 模型失败），避免管理员把兜底结果当成模型结论。
  */
-function renderApplicationSummary(container, result) {
-  if (!container) return;
+function applicationSummaryHtml(result) {
   const summary = result?.summary;
-  if (!summary) { container.hidden = true; return; }
-
+  if (!summary) return '';
   const statusClass = status => /满足/.test(status) ? 'is-ok' : /缺失/.test(status) ? 'is-bad' : 'is-warn';
   const fitRows = (summary.fit || []).map(item => `
     <li class="ai-fit-row ${statusClass(item.status || '')}">
@@ -1679,12 +1678,12 @@ function renderApplicationSummary(container, result) {
       <span class="ai-step-mark">${step.ok === false ? '未完成' : '已查'}</span>
       <span>${escapeHtml(step.label || step.tool || '')}${step.summary ? `：${escapeHtml(step.summary)}` : ''}</span>
     </li>`).join('');
+  const generatedAt = result.cachedAt ? ` · ${formatSummaryTime(result.cachedAt)}` : '';
 
-  container.hidden = false;
-  container.innerHTML = `
+  return `
     <div class="ai-summary-head">
       <strong>AI 摘要</strong>
-      <span class="ai-summary-mode${result.mock ? ' is-fallback' : ''}">${escapeHtml(result.mode || '')}</span>
+      <span class="ai-summary-mode${result.mock ? ' is-fallback' : ''}">${escapeHtml(result.mode || '')}${generatedAt}</span>
     </div>
     <p class="ai-summary-headline">${escapeHtml(summary.headline || '')}</p>
     ${fitRows ? `<ul class="ai-fit-list">${fitRows}</ul>` : ''}
@@ -1693,14 +1692,39 @@ function renderApplicationSummary(container, result) {
     ${steps ? `<div class="ai-summary-block"><h5>AI 审核过程</h5><ul class="ai-step-list">${steps}</ul></div>` : ''}
     <p class="ai-summary-note">AI 只做信息整理与提示，是否通过由你来判断。</p>`;
 }
+
+/** 摘要生成时间只显示到分钟，且用本地时间，方便管理员判断"这是刚才算的还是昨天的"。 */
+function formatSummaryTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')} 生成`;
+}
+
+function renderApplicationSummary(container, result) {
+  if (!container) return;
+  const html = applicationSummaryHtml(result);
+  if (!html) { container.hidden = true; return; }
+  container.hidden = false;
+  container.innerHTML = html;
+}
 async function handleApplicationSummarize(id, button) {
   const container = $(`[data-ai-summary-for="${id}"]`);
   const previous = button?.textContent;
   if (button) { button.disabled = true; button.textContent = '生成中…'; }
   try {
-    const result = await callYardApi({ action: 'admin.application.summarize', applicationId: id });
+    // 已有摘要时带上 force：管理员点"重新生成"就是要重算，
+    // 不该拿缓存把这次点击挡回去
+    const application = adminApplications().find(item => item.id === id);
+    const result = await callYardApi({ action: 'admin.application.summarize', applicationId: id, force: Boolean(application?.aiSummary) });
     if (result?.ok !== true) throw new Error(result?.message || '生成摘要失败。');
     renderApplicationSummary(container, result);
+    // 把结果写回本地列表，避免重新渲染时又变回旧内容
+    if (application) {
+      application.aiSummary = { mock: result.mock, mode: result.mode, steps: result.steps, summary: result.summary, cachedAt: result.cachedAt };
+      application.aiSummaryStale = false;
+    }
+    $('[data-ai-summary-stale]')?.remove();
+    toast(result.cached ? '已读取上次生成的摘要' : '摘要已保存，下次打开不用重新生成');
   } catch (error) {
     if (container) {
       container.hidden = false;
