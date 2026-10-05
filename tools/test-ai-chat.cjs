@@ -13,8 +13,13 @@ const SITE_ORIGIN = 'https://chuanzhibei-d3gvmowp1e63d7f33-1470251683.tcloudbase
 let passed = 0;
 let failed = 0;
 function check(label, condition, detail = '') {
-  if (condition) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (condition) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 
 /** 读一条 SSE 流，记录每个事件的到达时刻与内容。 */
@@ -47,7 +52,11 @@ async function readSse(url, body) {
     for (const part of parts) {
       const line = part.split('\n').find(l => l.startsWith('data:'));
       if (!line) continue;
-      try { events.push(JSON.parse(line.slice(5).trim())); } catch { /* 忽略不完整行 */ }
+      try {
+        events.push(JSON.parse(line.slice(5).trim()));
+      } catch {
+        /* 忽略不完整行 */
+      }
     }
   }
   return { status: response.status, contentType, allowOrigin, events, arrivals, firstByteMs, totalMs: Date.now() - startedAt };

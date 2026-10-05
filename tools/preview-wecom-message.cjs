@@ -83,7 +83,11 @@ const SAMPLE = {
     body: JSON.stringify({ msgtype: 'text', text: { content } })
   });
   let body = null;
-  try { body = await response.json(); } catch { /* 非 JSON */ }
+  try {
+    body = await response.json();
+  } catch {
+    /* 非 JSON */
+  }
   console.log(`\nHTTP ${response.status}  errcode=${body?.errcode}  errmsg=${body?.errmsg}`);
   if (body?.errcode === 0) console.log('✅ 已投递到群，请查看渲染效果。');
   else process.exit(1);

@@ -10,8 +10,13 @@ const aiHealth = 'https://chuanzhibei-d3gvmowp1e63d7f33-1470251683.ap-shanghai.a
 let passed = 0;
 let failed = 0;
 function check(label, ok, detail = '') {
-  if (ok) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (ok) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 
 async function grab(url) {

@@ -19,13 +19,18 @@ function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 function text(value, max = 1000) {
-  return String(value ?? '').trim().slice(0, max);
+  return String(value ?? '')
+    .trim()
+    .slice(0, max);
 }
 function normalizeContact(value) {
   return text(value, 120).replace(/[\s-]/g, '').toLowerCase();
 }
 function hash(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''))
+    .digest('hex');
 }
 function rows(result, operation = '数据库操作') {
   if (result?.error) {
@@ -57,7 +62,12 @@ function applicationRateKeys({ ip, browserToken, contactNormalized }, includeIp 
   return [...new Set(keys)];
 }
 function configuredAdmins() {
-  return new Set(text(process.env.ADMIN_UIDS, 1000).split(',').map(item => item.trim()).filter(Boolean));
+  return new Set(
+    text(process.env.ADMIN_UIDS, 1000)
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean)
+  );
 }
 async function requireAdmin(context) {
   const { uid } = contextInfo(context);
@@ -101,8 +111,13 @@ function beijingTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return text(value, 40);
   return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
   }).format(date);
 }
 /** 统计同一只宠物已收到多少份申请；失败不影响提醒发送。 */
@@ -132,7 +147,10 @@ function wecomLine(label, value, empty = '（未填写）') {
 function truncateUtf8(value, maxBytes) {
   const buffer = Buffer.from(String(value), 'utf8');
   if (buffer.length <= maxBytes) return String(value);
-  const cut = buffer.subarray(0, maxBytes).toString('utf8').replace(/\uFFFD+$/, '');
+  const cut = buffer
+    .subarray(0, maxBytes)
+    .toString('utf8')
+    .replace(/\uFFFD+$/, '');
   return `${cut}\n…（内容过长已截断，完整资料请打开管理员后台查看）`;
 }
 /**
@@ -172,7 +190,11 @@ async function notifyWeCom(application, secret) {
   const response = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   // 注意：企业微信即使发送失败也会返回 HTTP 200，真正的结果在响应体的 errcode 里。
   let body = null;
-  try { body = await response.json(); } catch { /* 非 JSON 响应，按下面的状态码判断 */ }
+  try {
+    body = await response.json();
+  } catch {
+    /* 非 JSON 响应，按下面的状态码判断 */
+  }
   if (body && typeof body.errcode === 'number' && body.errcode !== 0) {
     throw new Error(`企业微信提醒发送失败：${text(body.errmsg, 120) || body.errcode}`);
   }
@@ -192,7 +214,10 @@ async function recordWeComOutcome(secret, sent, reason) {
     lastAt: new Date().toISOString()
   });
   try {
-    await executePgSql(`INSERT INTO public.yard_settings (key, value, updated_at) VALUES ('wecom_webhook', ${sqlLiteral(patch)}::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = public.yard_settings.value || EXCLUDED.value, updated_at = NOW()`, secret);
+    await executePgSql(
+      `INSERT INTO public.yard_settings (key, value, updated_at) VALUES ('wecom_webhook', ${sqlLiteral(patch)}::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = public.yard_settings.value || EXCLUDED.value, updated_at = NOW()`,
+      secret
+    );
   } catch (error) {
     console.error('记录企业微信提醒结果失败：', error.message);
   }
@@ -211,16 +236,18 @@ async function publicBootstrap() {
   return {
     pets: pets.map(pet => ({
       ...pet,
-      media: media.filter(item => item.pet_id === pet.id).map(item => ({
-        id: item.id,
-        type: item.media_type,
-        storagePath: item.storage_path,
-        externalUrl: item.external_url,
-        caption: item.caption,
-        altText: item.alt_text,
-        isCover: item.is_cover,
-        sortOrder: item.sort_order
-      })),
+      media: media
+        .filter(item => item.pet_id === pet.id)
+        .map(item => ({
+          id: item.id,
+          type: item.media_type,
+          storagePath: item.storage_path,
+          externalUrl: item.external_url,
+          caption: item.caption,
+          altText: item.alt_text,
+          isCover: item.is_cover,
+          sortOrder: item.sort_order
+        })),
       updates: updates.filter(item => item.pet_id === pet.id)
     })),
     settings: Object.fromEntries(settings.map(item => [item.key, item.value]))
@@ -266,7 +293,9 @@ async function resolveSecret() {
         return { source: 'metadata', secretId: payload.TmpSecretId, secretKey: payload.TmpSecretKey, sessionToken: payload.Token || '' };
       }
     }
-  } catch { /* 元数据不可用时交给调用方统一报错 */ }
+  } catch {
+    /* 元数据不可用时交给调用方统一报错 */
+  }
   return null;
 }
 /**
@@ -281,7 +310,7 @@ async function resolveSecret() {
  * 导致所有申请提交都失败。
  */
 async function executePgSql(sql, secret) {
-  const credentials = secret || await resolveSecret();
+  const credentials = secret || (await resolveSecret());
   const { secretId, secretKey, sessionToken } = credentials || {};
   const envId = process.env.TCB_ENV || process.env.SCF_NAMESPACE;
   if (!secretId || !secretKey || !envId) throw new Error('申请服务暂不可用，请稍后再试。');
@@ -354,41 +383,55 @@ async function submitApplication(event, context) {
   const editTokenHash = hash(editToken);
   const editTokenExpiresAtMs = submittedAtMs + 24 * 60 * 60 * 1000;
   const secret = await resolveSecret();
-  const result = await submitApplicationRecord({
-    applicationId,
-    eventId,
-    rateEventIds,
-    rateKeys,
-    recentRateKeys,
-    petId,
-    applicationType: kind,
-    applicantName,
-    applicantAge: age,
-    applicantGender: gender,
-    contact,
-    contactNormalized,
-    hasChengduHome: event.hasChengduHome,
-    experience,
-    familyAgreement,
-    otherPets,
-    note: text(event.note, 1000),
-    sourceIpHash: ipHash,
-    browserTokenHash: browserHash,
-    actorUid: uid || '',
-    submittedAtMs,
-    editTokenHash,
-    editTokenExpiresAtMs
-  }, secret);
+  const result = await submitApplicationRecord(
+    {
+      applicationId,
+      eventId,
+      rateEventIds,
+      rateKeys,
+      recentRateKeys,
+      petId,
+      applicationType: kind,
+      applicantName,
+      applicantAge: age,
+      applicantGender: gender,
+      contact,
+      contactNormalized,
+      hasChengduHome: event.hasChengduHome,
+      experience,
+      familyAgreement,
+      otherPets,
+      note: text(event.note, 1000),
+      sourceIpHash: ipHash,
+      browserTokenHash: browserHash,
+      actorUid: uid || '',
+      submittedAtMs,
+      editTokenHash,
+      editTokenExpiresAtMs
+    },
+    secret
+  );
   if (!result?.ok) throw new Error(result?.message || '申请提交失败，请稍后再试。');
   const application = {
-    id: result.applicationId, pet_id: petId, pet_name: result.petName || '', application_type: kind,
+    id: result.applicationId,
+    pet_id: petId,
+    pet_name: result.petName || '',
+    application_type: kind,
     submitted_at: new Date(submittedAtMs).toISOString(),
-    applicant_name: applicantName, applicant_age: age, applicant_gender: gender,
-    contact, has_chengdu_home: event.hasChengduHome, experience,
-    family_agreement: familyAgreement, other_pets: otherPets, note: text(event.note, 1000)
+    applicant_name: applicantName,
+    applicant_age: age,
+    applicant_gender: gender,
+    contact,
+    has_chengdu_home: event.hasChengduHome,
+    experience,
+    family_agreement: familyAgreement,
+    other_pets: otherPets,
+    note: text(event.note, 1000)
   };
-  let notification = { sent: false };
-  let notifyReason = '';
+  // 两个分支（try 成功 / catch 兜底）都会给这两个变量赋值，
+  // 因此不设初值 —— 设了也永远不会被读到，反而容易让人误以为有「默认已发送」的语义。
+  let notification;
+  let notifyReason;
   try {
     notification = await notifyWeCom(application, secret);
     notifyReason = notification.reason || '已发送';
@@ -418,7 +461,19 @@ function applicantFields(event) {
   const experience = text(event.experience, 100);
   const familyAgreement = text(event.familyAgreement, 100);
   const otherPets = text(event.otherPets, 100);
-  if (!applicantName || !contactNormalized || !Number.isInteger(age) || age < 18 || age > 100 || !allowedApplicantGenders.has(gender) || typeof event.hasChengduHome !== 'boolean' || !allowedExperience.has(experience) || !allowedFamilyAgreement.has(familyAgreement) || !allowedOtherPets.has(otherPets)) throw new Error('请完整填写申请资料。');
+  if (
+    !applicantName ||
+    !contactNormalized ||
+    !Number.isInteger(age) ||
+    age < 18 ||
+    age > 100 ||
+    !allowedApplicantGenders.has(gender) ||
+    typeof event.hasChengduHome !== 'boolean' ||
+    !allowedExperience.has(experience) ||
+    !allowedFamilyAgreement.has(familyAgreement) ||
+    !allowedOtherPets.has(otherPets)
+  )
+    throw new Error('请完整填写申请资料。');
   return { applicantName, age, gender, contact, contactNormalized, experience, familyAgreement, otherPets, hasChengduHome: event.hasChengduHome, note: text(event.note, 1000) };
 }
 function editTokenHashOf(event) {
@@ -495,7 +550,12 @@ async function adminSavePet(event, context) {
   const adoptionStatus = text(pet.adoptionStatus, 30);
   const gender = text(pet.gender, 4);
   if (!text(pet.name, 60) || !allowedPetTypes.has(petType) || !allowedPetStatuses.has(adoptionStatus) || !allowedGenders.has(gender)) throw new Error('请完整填写宠物名称、种类、性别和状态。');
-  const tags = Array.isArray(pet.tags) ? pet.tags.map(item => text(item, 40)).filter(Boolean).slice(0, 20) : [];
+  const tags = Array.isArray(pet.tags)
+    ? pet.tags
+        .map(item => text(item, 40))
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
   const sql = `WITH saved AS (
       INSERT INTO public.pets (id, name, pet_type, adoption_status, gender, age_text, tags,
                                description, health, requirements, pause_reason, is_published, updated_at)
@@ -567,7 +627,7 @@ function ruleBasedFit(application, pet) {
     ['成都及周边住所', application.home === true ? '满足' : '缺失', '关系到能否就近回访'],
     ['养宠经验', application.experience && application.experience !== '没有' ? '满足' : '需确认', `申请填写：${text(application.experience, 20) || '未填写'}`],
     ['现有宠物相处', text(application.otherPets, 20) && application.otherPets !== '没有' ? '需确认' : '满足', `申请填写：${text(application.otherPets, 20) || '未填写'}`],
-    ['封窗／防护', /封窗|防护|纱窗/.test(haystack) ? '满足' : (/封窗|防护/.test(requirements) ? '缺失' : '未提及'), '养猫尤其需要确认']
+    ['封窗／防护', /封窗|防护|纱窗/.test(haystack) ? '满足' : /封窗|防护/.test(requirements) ? '缺失' : '未提及', '养猫尤其需要确认']
   ];
   return checks.map(([label, status, note]) => ({ label, status, note }));
 }
@@ -583,8 +643,9 @@ async function summarizeApplication(event, context) {
   const applicationId = text(event.applicationId, 120);
   if (!applicationId) throw new Error('缺少申请编号。');
 
-  const payload = sqlResult(await executePgSql(
-    `SELECT COALESCE((
+  const payload = sqlResult(
+    await executePgSql(
+      `SELECT COALESCE((
        SELECT jsonb_build_object(
          'applicant', jsonb_build_object(
            'name', a.applicant_name, 'age', a.applicant_age, 'gender', a.applicant_gender,
@@ -599,8 +660,9 @@ async function summarizeApplication(event, context) {
        WHERE a.id = ${sqlLiteral(applicationId)}
        LIMIT 1
      ), 'null'::jsonb) AS result`,
-    await resolveSecret()
-  ));
+      await resolveSecret()
+    )
+  );
   const detail = payload?.applicant ? payload : null;
   if (!detail) throw new Error('没有找到这条申请，可能已经被删除，请刷新后台后重试。');
   const fallbackHeadline = `${text(detail.applicant.name, 20) || '申请人'} · 意向「${text(detail.pet?.name, 20) || '未知'}」`;
@@ -608,7 +670,9 @@ async function summarizeApplication(event, context) {
   const apiKey = await resolveAiKey();
   if (!apiKey) {
     return {
-      ok: true, mock: true, mode: '演示模式（未配置模型 Key，以下为规则比对结果）',
+      ok: true,
+      mock: true,
+      mode: '演示模式（未配置模型 Key，以下为规则比对结果）',
       summary: {
         headline: fallbackHeadline,
         fit: ruleBasedFit(detail.applicant, detail.pet),
@@ -634,7 +698,10 @@ async function summarizeApplication(event, context) {
         temperature: 0.3,
         max_tokens: 900,
         response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
       })
     });
     if (!response.ok) throw new Error(`模型返回 ${response.status}`);
@@ -642,12 +709,18 @@ async function summarizeApplication(event, context) {
     const parsed = JSON.parse(text(data?.choices?.[0]?.message?.content, 4000));
     if (!parsed?.headline) throw new Error('模型返回内容缺少必要字段');
     return {
-      ok: true, mock: false, mode: '由 AI 生成',
+      ok: true,
+      mock: false,
+      mode: '由 AI 生成',
       summary: {
         headline: text(parsed.headline, 120),
-        fit: Array.isArray(parsed.fit) ? parsed.fit.slice(0, 8).map(item => ({
-          label: text(item?.label, 40), status: text(item?.status, 20), note: text(item?.note, 200)
-        })) : [],
+        fit: Array.isArray(parsed.fit)
+          ? parsed.fit.slice(0, 8).map(item => ({
+              label: text(item?.label, 40),
+              status: text(item?.status, 20),
+              note: text(item?.note, 200)
+            }))
+          : [],
         questions: Array.isArray(parsed.questions) ? parsed.questions.slice(0, 3).map(item => text(item, 200)) : [],
         caution: text(parsed.caution, 200)
       }
@@ -655,7 +728,9 @@ async function summarizeApplication(event, context) {
   } catch (error) {
     // 模型失败不能挡住管理员干活：退回规则摘要，并如实说明原因
     return {
-      ok: true, mock: true, mode: `模型调用失败（${text(error.message, 80)}），以下为规则比对结果`,
+      ok: true,
+      mock: true,
+      mode: `模型调用失败（${text(error.message, 80)}），以下为规则比对结果`,
       summary: {
         headline: fallbackHeadline,
         fit: ruleBasedFit(detail.applicant, detail.pet),
@@ -704,8 +779,11 @@ async function adminDeleteApplication(event, context) {
  * 把可读原因送达前端；同时不影响成功路径的返回值。
  */
 async function asReadableResult(run, fallback) {
-  try { return await run(); }
-  catch (error) { return { ok: false, message: text(error?.message || fallback, 200) }; }
+  try {
+    return await run();
+  } catch (error) {
+    return { ok: false, message: text(error?.message || fallback, 200) };
+  }
 }
 
 exports.main = async (event = {}, context = {}) => {
@@ -714,16 +792,25 @@ exports.main = async (event = {}, context = {}) => {
   if (action === 'debug.simple') return rows(await db.from('pets').select('id,name').limit(1), '数据库连通性检查');
   if (action === 'public.bootstrap') return publicBootstrap();
   if (action === 'application.submit') {
-    try { return await submitApplication(event, context); }
-    catch (error) { return { ok: false, message: text(error.message || '申请提交失败，请稍后重试。', 200) }; }
+    try {
+      return await submitApplication(event, context);
+    } catch (error) {
+      return { ok: false, message: text(error.message || '申请提交失败，请稍后重试。', 200) };
+    }
   }
   if (action === 'application.lookup') {
-    try { return await lookupApplication(event, await resolveSecret()); }
-    catch (error) { return { ok: false, message: text(error.message || '修改令牌校验失败，请稍后再试。', 200) }; }
+    try {
+      return await lookupApplication(event, await resolveSecret());
+    } catch (error) {
+      return { ok: false, message: text(error.message || '修改令牌校验失败，请稍后再试。', 200) };
+    }
   }
   if (action === 'application.edit') {
-    try { return await editApplication(event, await resolveSecret()); }
-    catch (error) { return { ok: false, message: text(error.message || '申请修改失败，请稍后再试。', 200) }; }
+    try {
+      return await editApplication(event, await resolveSecret());
+    } catch (error) {
+      return { ok: false, message: text(error.message || '申请修改失败，请稍后再试。', 200) };
+    }
   }
   // 管理类动作统一走可读错误包装：抛异常会被运行时包成无意义编号，管理员看不到原因。
   if (action === 'admin.inbox') return asReadableResult(() => adminInbox(context), '读取申请收件箱失败。');

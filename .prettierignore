@@ -1,0 +1,25 @@
+# Prettier 忽略清单
+#
+# 只格式化我们自己维护的「代码」与配置；下面几类刻意排除，理由都写在旁边。
+
+node_modules/
+release/
+web/
+tools/env-migration/
+
+# 锁文件由 npm 生成，不该由格式化工具改写
+package-lock.json
+
+# 修复前的云端函数源码留存，仅作回滚参考
+.cloudfn-backup/
+
+# ── 站点三件套（index.html / app.js / styles.css）────────────────
+# 刻意不做全量重排，理由：
+#   1. HTML 的空白符会影响内联元素排版，交付前重排有真实渲染风险；
+#   2. CSS 现有写法是「一属性一行」，重排会把它压成单行，可读性反而下降
+#      （实测一次全量格式化会让 styles.css 减少 2600 余行）；
+#   3. 三者由站点负责人长期维护，保持其原有排版更利于他本人阅读与修改。
+# 代码质量问题由 ESLint 覆盖（app.js 也在检查范围内），不依赖 Prettier。
+index.html
+app.js
+styles.css

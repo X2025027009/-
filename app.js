@@ -94,7 +94,6 @@ let cloudDb = null;
 let cloudMediaBucket = null;
 let adminAuthUser = null;
 let cloudApplications = null;
-let lastEditToken = '';
 // 企业微信机器人地址是私密配置：只有管理员能读，公开访客读不到这个 key。
 let cloudWecomWebhook = '';
 let cloudWecomWebhookLoaded = false;
@@ -955,7 +954,7 @@ function wecomStatusHint() {
   const when = atText ? `（${escapeHtml(atText)}）` : '';
   return cloudWecomStatus.ok
     ? `<span class="form-hint wecom-status is-ok">最近一次提醒：发送成功${when}</span>`
-    : `<span class="form-hint wecom-status is-error">最近一次提醒：发送失败${when}${cloudWecomStatus.reason ? `　原因：${escapeHtml(cloudWecomStatus.reason)}` : ''}</span>`;
+    : `<span class="form-hint wecom-status is-error">最近一次提醒：发送失败${when}${cloudWecomStatus.reason ? ` 原因：${escapeHtml(cloudWecomStatus.reason)}` : ''}</span>`;
 }
 async function openAdmin() {
   returnFocus = document.activeElement;
@@ -1864,7 +1863,8 @@ async function ensurePublicApplicationSession() {
 async function callYardApi(data) {
   if (!cloudState.connected || !cloudApp?.callFunction) throw new Error('云端连接尚未就绪，请稍后再试。');
   try { await ensurePublicApplicationSession(); }
-  catch (error) { throw new Error('申请服务暂未启用，请稍后再试。'); }
+  // 保留原始错误作为 cause：访客看到的仍是通用提示，但排查时能在控制台看到真实原因。
+  catch (error) { throw new Error('申请服务暂未启用，请稍后再试。', { cause: error }); }
   const response = await cloudApp.callFunction({ name: 'yard-api', parse: true, data });
   const result = typeof response?.result === 'string' ? JSON.parse(response.result) : response?.result;
   if (!result) throw new Error('申请服务返回异常，请稍后再试。');
@@ -2039,7 +2039,6 @@ document.addEventListener('submit', async event => {
     });
     saveApplications(); renderStats();
     rememberEditToken(result.applicationId, result.editToken);
-    lastEditToken = result.editToken || '';
     store.set(EDIT_NOTICE_DISMISSED_KEY, false);
     renderApplicantEditBanner();
     openApplicationSuccessModal(pet, kind, result);

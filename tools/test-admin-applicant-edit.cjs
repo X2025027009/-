@@ -35,24 +35,47 @@ const applicantEditsFromForm = new Function(`${extractFunction(source, 'applican
 // 用可控的表单数据替换 FormData，被测函数本身保持原样。
 const RealFormData = globalThis.FormData;
 let fields = {};
-globalThis.FormData = class { get(key) { return Object.prototype.hasOwnProperty.call(fields, key) ? fields[key] : null; } };
+globalThis.FormData = class {
+  get(key) {
+    return Object.prototype.hasOwnProperty.call(fields, key) ? fields[key] : null;
+  }
+};
 const fakeForm = {};
-const withFields = values => { fields = values; return fakeForm; };
+const withFields = values => {
+  fields = values;
+  return fakeForm;
+};
 
 let passed = 0;
 let failed = 0;
 function check(label, condition, detail = '') {
-  if (condition) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (condition) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 function throws(label, fn, expected) {
-  try { fn(); check(label, false, '没有抛出错误'); }
-  catch (error) { check(label, error.message === expected, `实际：${error.message}`); }
+  try {
+    fn();
+    check(label, false, '没有抛出错误');
+  } catch (error) {
+    check(label, error.message === expected, `实际：${error.message}`);
+  }
 }
 
 const loaded = {
-  name: '张三', age: 30, gender: '女', contact: '13800001111', home: '是',
-  experience: '有', family: '全部同意', otherPets: '没有', note: '原来的备注'
+  name: '张三',
+  age: 30,
+  gender: '女',
+  contact: '13800001111',
+  home: '是',
+  experience: '有',
+  family: '全部同意',
+  otherPets: '没有',
+  note: '原来的备注'
 };
 const formValuesFrom = app => ({
   applicantName: app.name,

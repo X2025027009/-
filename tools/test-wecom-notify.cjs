@@ -40,7 +40,13 @@ process.env.SCF_NAMESPACE = ENV_ID;
 
 const fakeSdk = {
   SYMBOL_CURRENT_ENV: Symbol('current-env'),
-  init: () => ({ rdb: () => ({ from: () => { throw new Error('不该访问 rdb'); } }) }),
+  init: () => ({
+    rdb: () => ({
+      from: () => {
+        throw new Error('不该访问 rdb');
+      }
+    })
+  }),
   getCloudbaseContext: () => ({
     TENCENTCLOUD_SECRETID: 'AKIDEXAMPLEFAKE000000000000000000',
     TENCENTCLOUD_SECRETKEY: 'FAKESECRETKEY000000000000000000',
@@ -87,8 +93,13 @@ const yardApi = require(path.join(__dirname, '..', 'functions', 'yard-api', 'ind
 let passed = 0;
 let failed = 0;
 function check(label, condition, detail = '') {
-  if (condition) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (condition) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 
 const APPLICANT = {
@@ -139,7 +150,12 @@ async function run(event) {
   check('发送成功后记录了结果供后台显示', Boolean(successWrite), '没有记录发送结果');
 
   const content = webhookPosts[0]?.body?.text?.content || '';
-  console.log(`\n     消息内容：\n${content.split('\n').map(l => '     ' + l).join('\n')}\n`);
+  console.log(
+    `\n     消息内容：\n${content
+      .split('\n')
+      .map(l => '     ' + l)
+      .join('\n')}\n`
+  );
   // 纯文本类型是硬要求：实测微信插件不渲染 markdown，会显示「暂不支持此消息类型」。
   check('使用纯文本消息类型（微信插件能显示）', webhookPosts[0]?.body?.msgtype === 'text', webhookPosts[0]?.body?.msgtype);
   check('没有发送 markdown 字段', webhookPosts[0]?.body?.markdown === undefined, JSON.stringify(Object.keys(webhookPosts[0]?.body || {})));
@@ -204,7 +220,11 @@ async function run(event) {
   delete process.env.WECOM_WEBHOOK;
   result = await run(submitEvent());
   check('提醒仍然发送成功', result?.notification?.sent === true, JSON.stringify(result?.notification));
-  check('读取了数据库里的机器人地址', pgRequests.some(r => String(r.Sql).trim().startsWith('SELECT') && String(r.Sql).includes('wecom_webhook')), '没有读取设置');
+  check(
+    '读取了数据库里的机器人地址',
+    pgRequests.some(r => String(r.Sql).trim().startsWith('SELECT') && String(r.Sql).includes('wecom_webhook')),
+    '没有读取设置'
+  );
   check('推送到数据库里配置的地址', webhookPosts[0]?.url === WEBHOOK_DB, webhookPosts[0]?.url);
 
   console.log('--- 5. 两处都没配置时安静跳过 ---');
@@ -234,7 +254,13 @@ async function run(event) {
   globalThis.fetch = async (url, init = {}) => {
     const body = JSON.parse(init.body || '{}');
     if (String(body.Sql || '').includes('count(*) FROM public.applications')) {
-      return { ok: true, status: 200, json: async () => { throw new Error('模拟统计失败'); } };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new Error('模拟统计失败');
+        }
+      };
     }
     return originalFetchInTest(url, init);
   };

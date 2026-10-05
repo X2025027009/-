@@ -1,0 +1,19 @@
+# 统一行尾符策略
+#
+# 背景：仓库内部一直是以 LF 存储的，但 Windows 上 core.autocrlf=true 会在
+# 检出时把部分文件转成 CRLF，导致「根目录文件」与「release/ 发布副本」
+# 字节不一致 —— 而发布源必须与源码逐字节相同，否则无法用哈希校验部署是否同步。
+#
+# 这里统一钉死为 LF，消除这种平台差异。
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.exe binary
+*.pptx binary

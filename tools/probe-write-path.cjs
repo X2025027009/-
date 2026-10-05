@@ -23,11 +23,17 @@ if (!globalThis.localStorage) {
   const store = new Map();
   globalThis.localStorage = {
     getItem: key => (store.has(key) ? store.get(key) : null),
-    setItem: (key, value) => { store.set(key, String(value)); },
-    removeItem: key => { store.delete(key); },
+    setItem: (key, value) => {
+      store.set(key, String(value));
+    },
+    removeItem: key => {
+      store.delete(key);
+    },
     clear: () => store.clear(),
     key: index => [...store.keys()][index] ?? null,
-    get length() { return store.size; }
+    get length() {
+      return store.size;
+    }
   };
 }
 
@@ -38,8 +44,7 @@ const config = new Function(`return (${html.match(/window\.YARD_CLOUD_CONFIG\s*=
 function describe(result) {
   if (!result) return '(无返回)';
   if (result.error) {
-    const parts = [result.error.message, result.error.code, result.error.details, result.error.hint]
-      .filter(Boolean).map(String);
+    const parts = [result.error.message, result.error.code, result.error.details, result.error.hint].filter(Boolean).map(String);
     return parts.join(' | ');
   }
   return JSON.stringify(result).slice(0, 300);
@@ -65,7 +70,11 @@ function withTimeout(promise, ms, label) {
 
   console.log(`环境：${config.env}\n`);
 
-  try { await withTimeout(app.auth().signInAnonymously(), 20000, '匿名登录'); } catch { /* 忽略 */ }
+  try {
+    await withTimeout(app.auth().signInAnonymously(), 20000, '匿名登录');
+  } catch {
+    /* 忽略 */
+  }
   const db = app.rdb();
 
   console.log('【1】匿名读取（对照组，应当成功）');
@@ -73,11 +82,18 @@ function withTimeout(promise, ms, label) {
   console.log('  →', describe(read.value));
 
   console.log('\n【2】匿名 INSERT 到 yard_settings（预期被拒，重点看拒绝来自哪一层）');
-  const insert = await withTimeout(db.from('yard_settings').upsert({
-    key: '__write_path_probe__',
-    value: { probe: true },
-    updated_at: new Date().toISOString()
-  }, { onConflict: 'key' }), 25000, 'INSERT');
+  const insert = await withTimeout(
+    db.from('yard_settings').upsert(
+      {
+        key: '__write_path_probe__',
+        value: { probe: true },
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'key' }
+    ),
+    25000,
+    'INSERT'
+  );
   console.log('  →', describe(insert.value));
 
   console.log('\n【3】匿名 UPDATE 公开表（预期被拒）');

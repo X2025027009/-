@@ -51,13 +51,20 @@ const RATE_DAILY_MAX = 120;
 // 只保留 OPTIONS 分支，避免预检请求落到业务逻辑上。
 
 function text(value, max = 1000) {
-  return String(value ?? '').trim().slice(0, max);
+  return String(value ?? '')
+    .trim()
+    .slice(0, max);
 }
 function hash(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''))
+    .digest('hex');
 }
 function clientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const forwarded = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
   return forwarded || String(req.headers['x-real-ip'] || '') || '';
 }
 
@@ -94,17 +101,16 @@ async function resolveSecret() {
 
   const roleName = process.env.ROLE_NAME || 'TCB_QcsRole';
   try {
-    const response = await fetch(
-      `http://metadata.tencentyun.com/latest/meta-data/cam/security-credentials/${roleName}`,
-      { signal: AbortSignal.timeout(1500) }
-    );
+    const response = await fetch(`http://metadata.tencentyun.com/latest/meta-data/cam/security-credentials/${roleName}`, { signal: AbortSignal.timeout(1500) });
     if (response.ok) {
       const payload = await response.json();
       if (payload?.TmpSecretId && payload?.TmpSecretKey) {
         return { source: 'metadata', secretId: payload.TmpSecretId, secretKey: payload.TmpSecretKey, sessionToken: payload.Token || '' };
       }
     }
-  } catch { /* 交给调用方统一报错 */ }
+  } catch {
+    /* 交给调用方统一报错 */
+  }
   return null;
 }
 async function executePgSql(sql) {
@@ -202,18 +208,20 @@ async function checkRateLimit(ip) {
 
 /** 组装系统提示词。核心约束：只能用档案里的信息，不许编。 */
 function buildSystemPrompt(pets) {
-  const catalog = pets.map(pet => {
-    const lines = [
-      `名称：${pet.name}（${pet.type}·${pet.gender}·${pet.age}）`,
-      `领养状态：${pet.status}`,
-      pet.tags.length ? `标签：${pet.tags.join('、')}` : '',
-      pet.description ? `性格与情况：${pet.description}` : '',
-      pet.health ? `健康情况：${pet.health}` : '',
-      pet.requirements ? `领养要求：${pet.requirements}` : '',
-      pet.pauseReason ? `暂不开放原因：${pet.pauseReason}` : ''
-    ].filter(Boolean);
-    return lines.join('\n');
-  }).join('\n\n');
+  const catalog = pets
+    .map(pet => {
+      const lines = [
+        `名称：${pet.name}（${pet.type}·${pet.gender}·${pet.age}）`,
+        `领养状态：${pet.status}`,
+        pet.tags.length ? `标签：${pet.tags.join('、')}` : '',
+        pet.description ? `性格与情况：${pet.description}` : '',
+        pet.health ? `健康情况：${pet.health}` : '',
+        pet.requirements ? `领养要求：${pet.requirements}` : '',
+        pet.pauseReason ? `暂不开放原因：${pet.pauseReason}` : ''
+      ].filter(Boolean);
+      return lines.join('\n');
+    })
+    .join('\n\n');
 
   return `你是「成都猫狗小院」流浪动物领养平台的 AI 领养匹配助手。
 
@@ -237,10 +245,13 @@ ${catalog}
 /** 校验并规范化前端传来的对话历史。 */
 function normalizeMessages(raw) {
   if (!Array.isArray(raw)) throw new Error('对话格式不正确。');
-  const turns = raw.slice(-MAX_TURNS).map(item => ({
-    role: item?.role === 'assistant' ? 'assistant' : 'user',
-    content: text(item?.content, MAX_MESSAGE_CHARS)
-  })).filter(item => item.content);
+  const turns = raw
+    .slice(-MAX_TURNS)
+    .map(item => ({
+      role: item?.role === 'assistant' ? 'assistant' : 'user',
+      content: text(item?.content, MAX_MESSAGE_CHARS)
+    }))
+    .filter(item => item.content);
   if (!turns.length) throw new Error('请先描述一下你的情况。');
   if (turns[turns.length - 1].role !== 'user') throw new Error('最后一条消息需要来自访客。');
   return turns;
@@ -301,7 +312,9 @@ async function streamDeepSeek(res, pets, messages, apiKey) {
         const parsed = JSON.parse(data);
         const delta = parsed?.choices?.[0]?.delta?.content;
         if (delta) writeSse(res, { type: 'delta', text: delta });
-      } catch { /* 上游偶发不完整行，跳过即可 */ }
+      } catch {
+        /* 上游偶发不完整行，跳过即可 */
+      }
     }
   }
   writeSse(res, { type: 'done', mock: false });
@@ -314,12 +327,19 @@ function readBody(req) {
     const chunks = [];
     req.on('data', chunk => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) { reject(new Error('请求内容过大。')); req.destroy(); return; }
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('请求内容过大。'));
+        req.destroy();
+        return;
+      }
       chunks.push(chunk);
     });
     req.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
-      catch { reject(new Error('请求格式不正确。')); }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+      } catch {
+        reject(new Error('请求格式不正确。'));
+      }
     });
     req.on('error', reject);
   });
@@ -347,9 +367,7 @@ async function resolveApiKey() {
 
   if (cachedApiKey !== null && Date.now() - cachedApiKeyAt < API_KEY_CACHE_MS) return cachedApiKey;
   try {
-    const response = await executePgSql(
-      "SELECT jsonb_build_object('key', COALESCE((SELECT value->>'apiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), '')) AS result"
-    );
+    const response = await executePgSql("SELECT jsonb_build_object('key', COALESCE((SELECT value->>'apiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), '')) AS result");
     const resolved = { key: text(sqlResult(response)?.key, 200), source: 'database' };
     cachedApiKey = resolved;
     cachedApiKeyAt = Date.now();
@@ -385,7 +403,10 @@ async function handleChat(req, res) {
     const apiKey = resolved.key;
     writeSse(res, { type: 'meta', mock: !apiKey, petCount: pets.length, keySource: resolved.source });
 
-    if (!apiKey) { await streamMock(res, pets, messages); return; }
+    if (!apiKey) {
+      await streamMock(res, pets, messages);
+      return;
+    }
     await streamDeepSeek(res, pets, messages, apiKey);
   } catch (error) {
     console.error('AI 对话失败：', error.message);
@@ -398,31 +419,40 @@ const server = http.createServer(async (req, res) => {
   const url = String(req.url || '/');
 
   // 预检交给平台自动附加 CORS 头，这里只需一个空 204，避免落到业务逻辑
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
 
-  if (url.includes('/chat') && req.method === 'POST') { await handleChat(req, res); return; }
+  if (url.includes('/chat') && req.method === 'POST') {
+    await handleChat(req, res);
+    return;
+  }
 
   const resolved = await resolveApiKey();
   const apiKey = resolved.key;
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({
-    ok: true,
-    service: 'ai-stream',
-    purpose: 'AI 领养匹配助手（SSE 流式）',
-    // 只暴露「有没有配 Key」与来源，绝不回显 Key 本身
-    model: apiKey ? DEEPSEEK_MODEL : 'mock',
-    mockMode: !apiKey,
-    keySource: resolved.source,
-    // 诊断用布尔值（不含任何密钥内容），便于定位「凭据缺失」这类问题
-    diagnostics: {
-      hasSecretId: Boolean(process.env.TENCENTCLOUD_SECRETID),
-      hasSecretKey: Boolean(process.env.TENCENTCLOUD_SECRETKEY),
-      hasSessionToken: Boolean(process.env.TENCENTCLOUD_SESSIONTOKEN),
-      hasEnvId: Boolean(process.env.TCB_ENV || process.env.SCF_NAMESPACE)
-    },
-    endpoints: { 'POST /chat': 'SSE 流式对话，body: {messages:[{role,content}]}' },
-    time: new Date().toISOString()
-  }));
+  res.end(
+    JSON.stringify({
+      ok: true,
+      service: 'ai-stream',
+      purpose: 'AI 领养匹配助手（SSE 流式）',
+      // 只暴露「有没有配 Key」与来源，绝不回显 Key 本身
+      model: apiKey ? DEEPSEEK_MODEL : 'mock',
+      mockMode: !apiKey,
+      keySource: resolved.source,
+      // 诊断用布尔值（不含任何密钥内容），便于定位「凭据缺失」这类问题
+      diagnostics: {
+        hasSecretId: Boolean(process.env.TENCENTCLOUD_SECRETID),
+        hasSecretKey: Boolean(process.env.TENCENTCLOUD_SECRETKEY),
+        hasSessionToken: Boolean(process.env.TENCENTCLOUD_SESSIONTOKEN),
+        hasEnvId: Boolean(process.env.TCB_ENV || process.env.SCF_NAMESPACE)
+      },
+      endpoints: { 'POST /chat': 'SSE 流式对话，body: {messages:[{role,content}]}' },
+      time: new Date().toISOString()
+    })
+  );
 });
 
 server.listen(PORT, () => {

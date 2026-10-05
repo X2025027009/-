@@ -25,11 +25,7 @@ const mode = (process.argv[2] || 'describe').toLowerCase();
 
 /** 用 node 直接调用 CLI 的 JS 入口，避免 shell 引号/转义问题。 */
 function callApi(action, body) {
-  const result = spawnSync(
-    process.execPath,
-    [cliEntry, 'api', 'tcb', action, '--body', JSON.stringify(body), '--json'],
-    { encoding: 'utf8' }
-  );
+  const result = spawnSync(process.execPath, [cliEntry, 'api', 'tcb', action, '--body', JSON.stringify(body), '--json'], { encoding: 'utf8' });
   if (result.error) throw result.error;
   return { stdout: result.stdout || '', stderr: result.stderr || '', status: result.status };
 }
@@ -38,7 +34,11 @@ function parseJson(text) {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end < start) return null;
-  try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
 }
 
 (async () => {

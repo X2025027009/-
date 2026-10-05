@@ -30,8 +30,13 @@ const authHeaders = {
 let passed = 0;
 let failed = 0;
 function check(label, condition, detail = '') {
-  if (condition) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (condition) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 
 async function request(method, table, { body, query = '' } = {}) {

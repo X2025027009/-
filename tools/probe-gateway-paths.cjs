@@ -16,33 +16,38 @@ if (!globalThis.localStorage) {
   const store = new Map();
   globalThis.localStorage = {
     getItem: key => (store.has(key) ? store.get(key) : null),
-    setItem: (key, value) => { store.set(key, String(value)); },
-    removeItem: key => { store.delete(key); },
+    setItem: (key, value) => {
+      store.set(key, String(value));
+    },
+    removeItem: key => {
+      store.delete(key);
+    },
     clear: () => store.clear(),
     key: index => [...store.keys()][index] ?? null,
-    get length() { return store.size; }
+    get length() {
+      return store.size;
+    }
   };
 }
 
 const seen = [];
 const originalFetch = globalThis.fetch;
 globalThis.fetch = (input, init) => {
-  const url = typeof input === 'string' ? input : (input?.url || String(input));
+  const url = typeof input === 'string' ? input : input?.url || String(input);
   if (String(url).includes('tcloudbasegateway')) {
     try {
       const parsed = new URL(String(url));
       seen.push(`${(init?.method || 'GET').toUpperCase()}  ${parsed.pathname}`);
-    } catch { /* 忽略无法解析的 URL */ }
+    } catch {
+      /* 忽略无法解析的 URL */
+    }
   }
   return originalFetch(input, init);
 };
 
 /** 给每步加超时，超时不算失败，只是继续。 */
 function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise(resolve => setTimeout(() => resolve(`${label} 超时（${ms}ms），跳过`), ms))
-  ]).catch(error => `${label} 异常：${error?.message || error}`);
+  return Promise.race([promise, new Promise(resolve => setTimeout(() => resolve(`${label} 超时（${ms}ms），跳过`), ms))]).catch(error => `${label} 异常：${error?.message || error}`);
 }
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');

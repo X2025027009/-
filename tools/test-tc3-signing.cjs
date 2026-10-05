@@ -25,7 +25,13 @@ delete process.env.WECOM_WEBHOOK;
 
 const fakeSdk = {
   SYMBOL_CURRENT_ENV: Symbol('current-env'),
-  init: () => ({ rdb: () => ({ from: () => { throw new Error('这些动作不应访问 rdb'); } }) }),
+  init: () => ({
+    rdb: () => ({
+      from: () => {
+        throw new Error('这些动作不应访问 rdb');
+      }
+    })
+  }),
   getCloudbaseContext: () => ({
     TENCENTCLOUD_SECRETID: SECRET_ID,
     TENCENTCLOUD_SECRETKEY: SECRET_KEY,
@@ -58,8 +64,13 @@ const yardApi = require(path.join(__dirname, '..', 'functions', 'yard-api', 'ind
 let passed = 0;
 let failed = 0;
 function check(label, condition, detail = '') {
-  if (condition) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (condition) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 
 const sha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -114,9 +125,15 @@ const applicantPayload = {
   const { sign } = require(path.join(__dirname, '..', 'node_modules', '@cloudbase', 'signature-nodejs'));
   const timestamp = Number(headers['X-TC-Timestamp']);
   const reference = sign({
-    secretId: SECRET_ID, secretKey: SECRET_KEY, method: 'POST', url: 'https://tcb.tencentcloudapi.com/',
+    secretId: SECRET_ID,
+    secretKey: SECRET_KEY,
+    method: 'POST',
+    url: 'https://tcb.tencentcloudapi.com/',
     headers: { 'Content-Type': 'application/json', Host: 'tcb.tencentcloudapi.com' },
-    params: body, timestamp, withSignedParams: false, isCloudApi: true
+    params: body,
+    timestamp,
+    withSignedParams: false,
+    isCloudApi: true
   }).authorization;
   const extractSignature = value => (String(value).match(/Signature=([0-9a-f]+)/) || [])[1];
   check('签名与签名库重算结果一致', Boolean(extractSignature(headers.Authorization)) && extractSignature(headers.Authorization) === extractSignature(reference));
@@ -133,7 +150,11 @@ const applicantPayload = {
   check('10 分钟限频使用浏览器键与联系键', recentArray.includes("'browser:") && recentArray.includes("'contact:"), recentArray.slice(0, 140));
   check('24 小时上限仍包含 IP 键', dailyArray.includes("'ip:"), dailyArray.slice(0, 140));
   const valuesBlock = (submit.sql.match(/FROM \(VALUES (.*?)\) AS item\(event_id,key_hash\)/s) || [])[1] || '';
-  check('限频记录仍写入全部三个键（含 IP）', ['ip:', 'browser:', 'contact:'].every(prefix => valuesBlock.includes(`'${prefix}`)), valuesBlock.slice(0, 220));
+  check(
+    '限频记录仍写入全部三个键（含 IP）',
+    ['ip:', 'browser:', 'contact:'].every(prefix => valuesBlock.includes(`'${prefix}`)),
+    valuesBlock.slice(0, 220)
+  );
 
   console.log('\n--- 2. 提交时发放修改令牌 ---');
   const editToken = submit.result?.editToken;
@@ -166,7 +187,7 @@ const applicantPayload = {
   }
 
   check('记录了 applicant_updated 事件', edit.sql.includes("'applicant_updated'"), '未记录修改事件');
-  const detailPart = edit.sql.split('jsonb_build_object(\'fields\'')[1] || '';
+  const detailPart = edit.sql.split("jsonb_build_object('fields'")[1] || '';
   check('事件只记录字段名，不记录字段值', !detailPart.includes('改名后的申请人') && !detailPart.includes('wxedited999'), detailPart.slice(0, 160));
   check('事件里列出了可修改字段名', detailPart.includes('applicant_name') && detailPart.includes('contact_normalized'), detailPart.slice(0, 160));
 

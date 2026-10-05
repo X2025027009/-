@@ -18,9 +18,7 @@ const path = require('node:path');
 const root = path.join(__dirname, '..');
 const envId = process.argv[2] || process.env.YARD_ENV || 'chuanzhibei-d3gvmowp1e63d7f33';
 // 第二个参数可指定策略文件，便于先应用诊断策略再恢复正式策略
-const policyFile = process.argv[3]
-  ? path.resolve(process.argv[3])
-  : path.join(root, 'cloudbase', 'policy', 'authz.rego');
+const policyFile = process.argv[3] ? path.resolve(process.argv[3]) : path.join(root, 'cloudbase', 'policy', 'authz.rego');
 const cliEntry = path.join(root, 'node_modules', '@cloudbase', 'cli', 'bin', 'cloudbase');
 
 const rego = fs.readFileSync(policyFile, 'utf8');

@@ -17,17 +17,26 @@ if (!globalThis.localStorage) {
   const store = new Map();
   globalThis.localStorage = {
     getItem: key => (store.has(key) ? store.get(key) : null),
-    setItem: (key, value) => { store.set(key, String(value)); },
-    removeItem: key => { store.delete(key); },
+    setItem: (key, value) => {
+      store.set(key, String(value));
+    },
+    removeItem: key => {
+      store.delete(key);
+    },
     clear: () => store.clear(),
     key: index => [...store.keys()][index] ?? null,
-    get length() { return store.size; }
+    get length() {
+      return store.size;
+    }
   };
 }
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const matched = html.match(/window\.YARD_CLOUD_CONFIG\s*=\s*(\{[\s\S]*?\})\s*;\s*<\/script>/);
-if (!matched) { console.error('无法从 index.html 读取 YARD_CLOUD_CONFIG'); process.exit(1); }
+if (!matched) {
+  console.error('无法从 index.html 读取 YARD_CLOUD_CONFIG');
+  process.exit(1);
+}
 const config = new Function(`return (${matched[1]});`)();
 
 const results = [];
@@ -100,11 +109,17 @@ function summarize(value) {
         action: 'application.submit',
         petId: '__probe_nonexistent_pet__',
         applicationType: '正式领养申请',
-        name: '探针测试', age: 30, gender: '女',
+        name: '探针测试',
+        age: 30,
+        gender: '女',
         contact: `__probe_${Date.now()}__`,
-        hasChengduHome: true, experience: '有',
-        familyAgreement: '全部同意', otherPets: '没有', note: '',
-        website: '', formStartedAt: Date.now() - 60000,
+        hasChengduHome: true,
+        experience: '有',
+        familyAgreement: '全部同意',
+        otherPets: '没有',
+        note: '',
+        website: '',
+        formStartedAt: Date.now() - 60000,
         browserToken: `probe-${Date.now()}`
       }
     });

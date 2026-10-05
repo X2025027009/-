@@ -9,8 +9,13 @@ const base = 'https://chuanzhibei-d3gvmowp1e63d7f33-1470251683.tcloudbaseapp.com
 let passed = 0;
 let failed = 0;
 function check(label, ok, detail = '') {
-  if (ok) { passed += 1; console.log(`✅ ${label}`); }
-  else { failed += 1; console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`); }
+  if (ok) {
+    passed += 1;
+    console.log(`✅ ${label}`);
+  } else {
+    failed += 1;
+    console.log(`❌ ${label}${detail ? `\n     ${detail}` : ''}`);
+  }
 }
 
 (async () => {
@@ -26,8 +31,16 @@ function check(label, ok, detail = '') {
   const re = /(?:src|href)="([^"]+)"/g;
   let match;
   while ((match = re.exec(html))) assets.push(match[1]);
-  check('引用了构建产物', assets.some(a => a.includes('/v2/assets/')), assets.join(', '));
-  check('所有资源都带 /v2/ 前缀（子路径部署正确）', assets.every(a => a.startsWith('/v2/') || a.startsWith('http')), assets.join(', '));
+  check(
+    '引用了构建产物',
+    assets.some(a => a.includes('/v2/assets/')),
+    assets.join(', ')
+  );
+  check(
+    '所有资源都带 /v2/ 前缀（子路径部署正确）',
+    assets.every(a => a.startsWith('/v2/') || a.startsWith('http')),
+    assets.join(', ')
+  );
 
   for (const asset of assets) {
     const url = asset.startsWith('http') ? asset : base + asset;

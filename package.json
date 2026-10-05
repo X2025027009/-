@@ -1,7 +1,25 @@
 {
+  "name": "chengdu-cat-dog",
+  "private": true,
+  "version": "1.0.0",
+  "description": "成都猫狗小院 · 流浪猫狗领养平台（传智杯 AI WEB 网页开发挑战赛参赛作品）",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node tools/probe-browser-path.cjs && node tools/test-ai-chat.cjs && node tools/check-ai-preview.cjs",
+    "test:unit": "node tools/test-tc3-signing.cjs && node tools/test-wecom-notify.cjs && node tools/test-admin-applicant-edit.cjs && node tools/verify-anon-lockdown.cjs",
+    "deploy:fn": "cloudbase fn deploy yard-api -e chuanzhibei-d3gvmowp1e63d7f33 --force --install-dependency false",
+    "deploy:web": "cloudbase hosting deploy release -e chuanzhibei-d3gvmowp1e63d7f33 --verify"
+  },
   "devDependencies": {
     "@cloudbase/cli": "^3.8.1",
-    "esbuild": "^0.28.2"
+    "@eslint/js": "^10.0.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9"
   },
   "dependencies": {
     "@cloudbase/js-sdk": "^3.9.2",
