@@ -1,4 +1,6 @@
 # 本地依赖和临时文件
+__pycache__/
+*.pyc
 .commitmsg
 node_modules/
 *.zip
