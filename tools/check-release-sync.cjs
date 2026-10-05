@@ -23,6 +23,21 @@ const FILES = ['app.js', 'index.html', 'styles.css'];
 const SITE = 'https://chuanzhibei-d3gvmowp1e63d7f33-1470251683.tcloudbaseapp.com';
 const offline = process.argv.includes('--offline');
 
+/**
+ * 站点素材（assets/ 下的图片等）也要一起比对。
+ *
+ * 之前只盯三个代码文件，后来加了小院合影才发现：改了图没同步、
+ * 或者图没上传，检查都不会报——而那两件事同样会让线上显示旧内容。
+ */
+function assetFiles() {
+  const dir = path.join(ROOT, 'assets');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(name => !name.startsWith('.'))
+    .map(name => `assets/${name}`);
+}
+const ALL_FILES = [...FILES, ...assetFiles()];
+
 const sha = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
 
 let passed = 0;
@@ -36,7 +51,7 @@ function check(label, condition, detail = '') {
   console.log('发布同步检查\n');
 
   console.log('【1】根目录 → release/');
-  for (const file of FILES) {
+  for (const file of ALL_FILES) {
     const rootPath = path.join(ROOT, file);
     const releasePath = path.join(ROOT, 'release', file);
     if (!fs.existsSync(rootPath) || !fs.existsSync(releasePath)) {
@@ -51,7 +66,7 @@ function check(label, condition, detail = '') {
     console.log('\n（--offline：跳过线上比对）');
   } else {
     console.log('\n【2】release/ → 线上');
-    for (const file of FILES) {
+    for (const file of ALL_FILES) {
       const local = fs.readFileSync(path.join(ROOT, 'release', file));
       try {
         const response = await fetch(`${SITE}/${file}?t=${Date.now()}`);

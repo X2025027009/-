@@ -157,10 +157,45 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
 
 .about-section { padding-top: 0; background: var(--surface); }
 .about-layout { display: grid; grid-template-columns: 1.15fr .85fr; gap: 20px; }
-.about-card { padding: 52px; background: var(--pale-yellow); border-radius: 20px; }
+/* 卡片内边距与圆角写成变量：合影要贴到卡片底边，得靠负外边距抵消内边距，
+   变量化之后移动端改一处即可，不用在两条规则里各改一遍 */
+.about-card {
+  --pad-y: 52px;
+  --pad-x: 52px;
+  --card-radius: 20px;
+  padding: var(--pad-y) var(--pad-x);
+  background: var(--pale-yellow);
+  border-radius: var(--card-radius);
+}
 .about-card h2 { margin-bottom: 18px; }
 .about-card > p:not(.section-note) { max-width: 620px; margin-bottom: 12px; color: #51564d; line-height: 1.9; }
 .quiet-copy { color: #796f56 !important; font-size: 13px; }
+
+/* ── 小院合影 ────────────────────────────────────────────────
+   不做"照片浮在黄色卡片上"那种贴图效果，而是让照片贴到卡片底边、
+   成为卡片的底座：靠负外边距抵消内边距，底部圆角与卡片一致。
+   顶部再用一段渐变从卡片底色过渡到照片，避免一条硬边。
+   照片本身已做过轻微暖化处理，冷灰调向站点暖色靠拢。 */
+.about-photo {
+  position: relative;
+  margin: 30px calc(var(--pad-x) * -1) calc(var(--pad-y) * -1);
+  border-radius: 0 0 var(--card-radius) var(--card-radius);
+  overflow: hidden;
+  background: var(--pale-yellow);
+  line-height: 0;
+}
+.about-photo::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 46px;
+  background: linear-gradient(to bottom, var(--pale-yellow), rgba(255, 240, 200, 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.about-photo img { display: block; width: 100%; height: auto; }
 .contact-card { padding: 48px; border-radius: 20px; background: var(--ink); color: #fffdf6; }
 .contact-icon { width: 44px; height: 44px; margin-bottom: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--warm-yellow); color: var(--ink); }
 .contact-icon svg { width: 23px; height: 23px; }
@@ -409,6 +444,8 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
   .process-layout { gap: 35px; }
   .story-image { min-height: 365px; }
   .about-card, .contact-card { padding: 30px 24px; border-radius: 16px; }
+  /* 合影的负外边距依赖这两个变量，移动端必须同步改，否则照片会溢出卡片 */
+  .about-card { --pad-y: 30px; --pad-x: 24px; --card-radius: 16px; }
   .contact-card h3 { font-size: 26px; }
   .contact-modal-list div { grid-template-columns: 72px minmax(0,1fr); }
   .footer-inner { grid-template-columns: 1fr; gap: 16px; justify-items: start; }
