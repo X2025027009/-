@@ -8,8 +8,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node tools/probe-browser-path.cjs && node tools/test-ai-chat.cjs && node tools/check-ai-preview.cjs",
-    "test:unit": "node tools/test-tc3-signing.cjs && node tools/test-wecom-notify.cjs && node tools/test-admin-applicant-edit.cjs && node tools/verify-anon-lockdown.cjs",
+    "test": "node tools/check-release-sync.cjs && node tools/check-admin-settings.cjs && node tools/probe-browser-path.cjs && node tools/test-ai-chat.cjs && node tools/test-ai-tools.cjs && node tools/check-ai-preview.cjs",
+    "test:unit": "node tools/test-knowledge.cjs && node tools/test-tc3-signing.cjs && node tools/test-wecom-notify.cjs && node tools/test-admin-applicant-edit.cjs && node tools/verify-anon-lockdown.cjs",
+    "health:tools": "node tools/check-ai-tools-health.cjs",
     "deploy:fn": "cloudbase fn deploy yard-api -e chuanzhibei-d3gvmowp1e63d7f33 --force --install-dependency false",
     "deploy:web": "cloudbase hosting deploy release -e chuanzhibei-d3gvmowp1e63d7f33 --verify"
   },
