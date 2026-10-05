@@ -1222,7 +1222,8 @@ function renderAdminSettings() {
         <div class="field full"><label>首页简介</label><textarea name="intro">${escapeHtml(settings.intro)}</textarea></div>
         <div class="field full"><label for="wecomWebhook">企业微信机器人地址</label><input id="wecomWebhook" name="wecomWebhook" value="${escapeHtml(cloudWecomWebhook)}" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." autocomplete="off" /><span class="form-hint">在企业微信群里点「群机器人 → 添加机器人」，把拿到的 Webhook 地址粘贴到这里。保存后，下一位访客提交申请时群里就会收到提醒。提醒只包含宠物、类型和时间，不会发送申请人姓名、电话、住址等隐私。留空表示关闭提醒。</span>${wecomStatusHint()}</div>
         <div class="field full"><label for="aiApiKey">AI 模型 API Key（DeepSeek）</label><input id="aiApiKey" name="aiApiKey" placeholder="${cloudAiKey.configured ? '如需更换请填入新的 Key，留空表示保持现状' : 'sk-...'}" autocomplete="off" /><span class="form-hint ${cloudAiKey.configured ? 'ai-key-status is-ok' : 'ai-key-status'}">${cloudAiKey.configured ? `已配置（${escapeHtml(cloudAiKey.hint)}）：AI 匹配助手使用真实模型。` : '尚未配置：AI 匹配助手运行在演示模式，回复由内置示例生成，不会调用真实模型。'}出于安全考虑不回显完整密钥，填入新值即视为替换。该密钥只保存在管理员专属设置中，匿名访客读不到，也不会出现在任何前端代码或仓库里。</span></div>
-        <div class="field full"><label for="tokenhubApiKey">腾讯云 TokenHub API Key（向量检索与图像理解）</label><input id="tokenhubApiKey" name="tokenhubApiKey" placeholder="${cloudTokenhubKey.configured ? '如需更换请填入新的 Key，留空表示保持现状' : '在 TokenHub 控制台「API Key 管理」创建'}" autocomplete="off" /><span class="form-hint ${cloudTokenhubKey.configured ? 'ai-key-status is-ok' : 'ai-key-status'}">${cloudTokenhubKey.configured ? `已配置（${escapeHtml(cloudTokenhubKey.hint)}）：可按档案语义检索、可用照片搜宠物。` : '尚未配置：宠物检索暂时只能靠关键词匹配，也不能用照片搜宠物。'}用于把宠物档案、领养政策、回访记录转换成向量以便按**意思**检索，以及把照片转换成向量做「以图搜宠」。与上面的对话 Key 互不影响，各自独立保存。同样不回显完整密钥。</span></div>
+        <div class="field full"><label for="tokenhubApiKey">腾讯云 TokenHub API Key（向量检索与图像理解）</label><input id="tokenhubApiKey" name="tokenhubApiKey" placeholder="${cloudTokenhubKey.configured ? '如需更换请填入新的 Key，留空表示保持现状' : '在 TokenHub 控制台「API Key 管理」创建'}" autocomplete="off" /><span class="form-hint ${cloudTokenhubKey.configured ? 'ai-key-status is-ok' : 'ai-key-status'}">${cloudTokenhubKey.configured ? `已配置（${escapeHtml(cloudTokenhubKey.hint)}）：可按档案语义检索、可用照片搜宠物。` : '尚未配置：宠物检索暂时只能靠关键词匹配，也不能用照片搜宠物。'}用于把宠物档案、领养政策、回访记录转换成向量以便按意思检索，以及把照片转换成向量做「以图搜宠」。与上面的对话 Key 互不影响，各自独立保存。同样不回显完整密钥。</span></div>
+        <div class="field full"><label>AI 配置自检</label><button class="admin-edit" type="button" data-diagnose-ai>检查 AI 配置</button><span class="form-hint">换完 Key 之后点一下：检查两个 Key 是否可用、向量模型的维度与语义方向是否正确。<strong>不会显示密钥内容</strong>，测试用的是固定字符串，不涉及任何申请人数据。</span><div class="ai-diagnose-result" data-diagnose-result hidden></div></div>
       </div>
       <button class="button button-primary form-submit" type="submit">保存网站设置</button>
     </form>`;
@@ -1701,6 +1702,67 @@ async function handleApplicationSummarize(id, button) {
     if (button) { button.disabled = false; button.textContent = previous || 'AI 摘要'; }
   }
 }
+/**
+ * 渲染 AI 配置自检结果。
+ *
+ * 重点是把「配好了」和「真的能用」区分开 —— 光有 Key 不代表接口通，
+ * 所以除了是否配置，还要显示向量维度、耗时和语义方向是否正常。
+ */
+function renderDiagnoseResult(container, report) {
+  if (!container) return;
+  const embedding = report?.embedding || null;
+  const items = [
+    { label: '对话模型（DeepSeek）', ok: Boolean(report?.deepseek?.configured), text: report?.deepseek?.configured ? '已配置' : '未配置 —— AI 匹配助手运行在演示模式' },
+    { label: '向量与图像（TokenHub）', ok: Boolean(report?.tokenhub?.configured), text: report?.tokenhub?.configured ? '已配置' : '未配置 —— 暂时只能按关键词检索' }
+  ];
+  if (embedding) {
+    items.push({
+      label: '向量接口连通性',
+      ok: Boolean(embedding.ok),
+      text: embedding.ok
+        ? `${embedding.model}，${embedding.dimension} 维，耗时 ${embedding.elapsedMs}ms`
+        : `调用失败：${embedding.message || '原因未知'}`
+    });
+    if (embedding.ok) {
+      items.push({
+        label: '语义方向',
+        ok: embedding.semanticDirectionCorrect === true,
+        text: `领养相关两句相似度 ${embedding.relatedScore}，与无关句 ${embedding.unrelatedScore} —— ${embedding.semanticDirectionCorrect ? '方向正确（相关的高于无关的）' : '方向异常，检索结果会不可靠'}`
+      });
+    }
+  }
+  if (report?.corpus) {
+    items.push({ label: '可检索内容', ok: true, text: `已发布宠物 ${report.corpus.publishedPets} 只，公开照片 ${report.corpus.publicPhotos} 张` });
+  }
+
+  container.hidden = false;
+  container.innerHTML = `
+    <ul class="ai-fit-list">
+      ${items.map(item => `
+        <li class="ai-fit-row ${item.ok ? 'is-ok' : 'is-bad'}">
+          <span class="ai-fit-status">${item.ok ? '正常' : '待办'}</span>
+          <strong>${escapeHtml(item.label)}</strong>
+          <span class="ai-fit-note">${escapeHtml(item.text)}</span>
+        </li>`).join('')}
+    </ul>`;
+}
+async function handleDiagnoseAi(button) {
+  const container = $('[data-diagnose-result]');
+  const previous = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = '检查中…'; }
+  try {
+    const result = await callYardApi({ action: 'admin.ai.diagnose' });
+    if (result?.ok !== true) throw new Error(result?.message || '自检失败。');
+    renderDiagnoseResult(container, result);
+  } catch (error) {
+    if (container) {
+      container.hidden = false;
+      container.innerHTML = `<p class="ai-summary-caution">自检失败：${escapeHtml(error.message || '请稍后重试')}</p>`;
+    }
+  } finally {
+    if (button) { button.disabled = false; button.textContent = previous || '检查 AI 配置'; }
+  }
+}
 async function handleApplicationDelete(id) {
   const application = adminApplications().find(item => item.id === id);
   if (!application) { toast('没有找到这条申请，请刷新管理员后台后重试。'); return; }
@@ -1838,6 +1900,7 @@ document.addEventListener('click', event => {
   if (deleteApplicationButton) { handleApplicationDelete(deleteApplicationButton.dataset.deleteApplication); return; }
   const summarizeButton = event.target.closest('[data-summarize-application]');
   if (summarizeButton) { handleApplicationSummarize(summarizeButton.dataset.summarizeApplication, summarizeButton); return; }
+  if (event.target.closest('[data-diagnose-ai]')) { handleDiagnoseAi(event.target.closest('[data-diagnose-ai]')); return; }
   const deletePetButton = event.target.closest('[data-delete-pet]');
   if (deletePetButton) { handlePetDelete(deletePetButton.dataset.deletePet); return; }
   if (event.target.closest('#adminButton, #footerAdmin')) { openAdmin(); return; }

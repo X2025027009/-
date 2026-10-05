@@ -616,6 +616,103 @@ async function resolveAiKey() {
 }
 
 /**
+ * TokenHub 向量接口（官方文档核实过的规格）。
+ *   文本     POST https://tokenhub.tencentmaas.com/v1/embeddings
+ *   多模态   POST https://tokenhub.tencentmaas.com/v1/embeddings/multimodal
+ *   鉴权     Authorization: Bearer <API_KEY>（OpenAI 兼容）
+ *
+ * 维度固定、不可自定义：0.6b=1024、4b=2560、vl-2b=2048、vl-8b=4096。
+ * 文本选 0.6b 的理由：pgvector 的 ANN 索引只支持 2000 维以内，
+ * 1024 维能建 HNSW 索引，2560 维只能全表精确扫描——规模一大反而更慢。
+ */
+const TOKENHUB_BASE = 'https://tokenhub.tencentmaas.com/v1';
+const EMBEDDING_MODEL = process.env.TOKENHUB_EMBEDDING_MODEL || 'kinfra-text-embedding-0.6b';
+
+/** 余弦相似度。用于自检时判断"语义方向对不对"，不做任何业务决策。 */
+function cosineSimilarity(a, b) {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  return denominator ? dot / denominator : 0;
+}
+
+/**
+ * AI 配置自检（管理员）。
+ *
+ * 目的：管理员换完 Key 之后能立刻知道"到底通没通"，而不用等访客提问才发现。
+ *
+ * 安全：**只返回结论，绝不回显任何密钥内容**；测试用的是固定字符串，
+ * 不涉及任何申请人数据。因此这个动作即使被反复调用也不会泄露信息。
+ */
+async function diagnoseAiConfig(context) {
+  await requireAdmin(context);
+  const payload = sqlResult(await executePgSql(
+    `SELECT jsonb_build_object(
+       'deepseek', COALESCE((SELECT value->>'apiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), ''),
+       'tokenhub', COALESCE((SELECT value->>'tokenhubApiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), ''),
+       'petCount', (SELECT count(*) FROM public.pets WHERE is_published = TRUE),
+       'photoCount', (SELECT count(*) FROM public.pet_media WHERE is_public = TRUE)
+     ) AS result`,
+    await resolveSecret()
+  ));
+  const config = payload || {};
+  const report = {
+    ok: true,
+    deepseek: { configured: Boolean(config.deepseek) },
+    tokenhub: { configured: Boolean(config.tokenhub) },
+    corpus: { publishedPets: Number(config.petCount) || 0, publicPhotos: Number(config.photoCount) || 0 },
+    embedding: null
+  };
+  if (!config.tokenhub) {
+    report.embedding = { ok: false, message: '尚未配置 TokenHub Key，宠物检索暂时只能按关键词匹配。' };
+    return report;
+  }
+
+  // 语义方向的冒烟测试：前两句都是领养场景，第三句无关。
+  // 正确的模型应当让"相关 vs 相关"的相似度明显高于"相关 vs 无关"。
+  const samples = ['我住在成都，租的房子，房东同意养猫', '家里有封窗，白天基本有人在家', '今天股市大跌，我很担心'];
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(`${TOKENHUB_BASE}/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.tokenhub}` },
+      body: JSON.stringify({ model: EMBEDDING_MODEL, input: samples, encoding_format: 'float' })
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      report.embedding = { ok: false, status: response.status, message: text(data?.error?.message || data?.message || `接口返回 ${response.status}`, 200) };
+      return report;
+    }
+    const vectors = (data?.data || []).map(item => item.embedding).filter(item => Array.isArray(item) && item.length);
+    if (vectors.length < samples.length) {
+      report.embedding = { ok: false, message: `接口只返回了 ${vectors.length} 条向量，期望 ${samples.length} 条。` };
+      return report;
+    }
+    const related = cosineSimilarity(vectors[0], vectors[1]);
+    const unrelated = cosineSimilarity(vectors[0], vectors[2]);
+    report.embedding = {
+      ok: true,
+      model: EMBEDDING_MODEL,
+      dimension: vectors[0].length,
+      totalTokens: Number(data?.usage?.total_tokens) || null,
+      elapsedMs: Date.now() - startedAt,
+      relatedScore: Number(related.toFixed(4)),
+      unrelatedScore: Number(unrelated.toFixed(4)),
+      semanticDirectionCorrect: related > unrelated
+    };
+  } catch (error) {
+    report.embedding = { ok: false, message: text(error.message, 200) };
+  }
+  return report;
+}
+
+/**
  * 条件比对兜底：没有模型（或模型失败）时用规则给出初步结果，
  * 保证管理员的功能不会整体失效——只是精度下降，并如实标注来源。
  */
@@ -817,6 +914,7 @@ exports.main = async (event = {}, context = {}) => {
   if (action === 'admin.application.update') return asReadableResult(() => updateApplication(event, context), '更新申请失败。');
   if (action === 'admin.application.delete') return asReadableResult(() => adminDeleteApplication(event, context), '删除申请失败。');
   if (action === 'admin.application.summarize') return asReadableResult(() => summarizeApplication(event, context), '生成申请摘要失败。');
+  if (action === 'admin.ai.diagnose') return asReadableResult(() => diagnoseAiConfig(context), 'AI 配置自检失败。');
   if (action === 'admin.pet.save') return asReadableResult(() => adminSavePet(event, context), '保存宠物档案失败。');
   if (action === 'admin.settings.save') return asReadableResult(() => adminSaveSettings(event, context), '保存网站设置失败。');
   throw new Error('未知操作。');
