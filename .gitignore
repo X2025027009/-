@@ -1,4 +1,5 @@
 # 本地依赖和临时文件
+.commitmsg
 node_modules/
 *.zip
 *.exe
