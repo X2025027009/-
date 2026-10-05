@@ -661,6 +661,38 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
   font-size: 12px;
 }
 
+/* 以图搜宠：与对话区并列的另一种入口，样式上从属、不抢主流程 */
+.match-photo {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px dashed var(--soft-line);
+  border-radius: var(--radius);
+  background: var(--cream);
+}
+.match-photo-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.match-photo-title { font-weight: 700; font-size: 13.5px; }
+.match-photo-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.match-photo-actions { display: flex; gap: 10px; }
+.match-photo-pick { cursor: pointer; }
+
+.match-photo-result { margin-top: 12px; display: grid; gap: 8px; }
+.match-photo-lead { margin: 0; font-size: 13px; color: var(--muted); }
+.match-photo-empty { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.match-photo-hint { margin: 4px 0 0; font-size: 12px; color: var(--muted); line-height: 1.65; }
+.match-photo-hit {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: var(--surface);
+  border: 1px solid var(--soft-line);
+}
+.match-photo-hit img { width: 52px; height: 52px; object-fit: cover; border-radius: 9px; }
+.match-photo-hit strong { font-size: 14px; }
+.match-photo-hit p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+
 /* 语音输入按钮：录音中用暖黄底 + 呼吸动画，明确"正在听" */
 .match-voice { display: inline-flex; align-items: center; gap: 6px; }
 .match-voice-icon { font-size: 14px; line-height: 1; }

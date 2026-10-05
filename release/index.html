@@ -132,6 +132,20 @@
             </div>
           </form>
 
+          <div class="match-photo">
+            <div class="match-photo-head">
+              <span class="match-photo-title">或者，用一张照片来找</span>
+              <span class="match-photo-note">照片只在你的浏览器里压缩后发去比对，不会保存到任何地方</span>
+            </div>
+            <div class="match-photo-actions">
+              <label class="button button-ghost match-photo-pick">
+                <input id="matchPhotoFile" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+                <span id="matchPhotoLabel">选择一张照片</span>
+              </label>
+            </div>
+            <div id="matchPhotoResult" class="match-photo-result" hidden></div>
+          </div>
+
           <p class="match-mode-hint" id="matchModeHint" hidden></p>
 
           <p class="match-disclaimer">

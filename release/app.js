@@ -1968,6 +1968,12 @@ document.addEventListener('click', event => {
   if (event.target.closest('[data-diagnose-ai]')) { handleDiagnoseAi(event.target.closest('[data-diagnose-ai]')); return; }
   const describeButton = event.target.closest('[data-describe-photo]');
   if (describeButton) { handleDescribePhoto(describeButton); return; }
+  const photoAsk = event.target.closest('[data-match-photo-ask]');
+  if (photoAsk) {
+    const name = photoAsk.dataset.matchPhotoAsk;
+    if (name) matchAsk(`我看到一张照片，很像${name}。能介绍一下它吗？我适合养它吗？`);
+    return;
+  }
   const deletePetButton = event.target.closest('[data-delete-pet]');
   if (deletePetButton) { handlePetDelete(deletePetButton.dataset.deletePet); return; }
   if (event.target.closest('#adminButton, #footerAdmin')) { openAdmin(); return; }
@@ -2512,6 +2518,98 @@ function matchAppendSpeak(text) {
   thread.scrollTop = thread.scrollHeight;
 }
 
+/**
+ * 以图搜宠。
+ *
+ * 为什么值得做：很多人说不清自己想要什么，但能指着一张照片说「就这种」。
+ * 描述性需求用文字表达门槛很高，用照片就简单得多。
+ *
+ * 隐私：访客的照片**只在本机压到 768px 后作为 data URL 发出**，
+ * 不写入云存储、不落盘。宠物照片的签名地址由前端提供——
+ * 服务端自己拼不出带签名的地址，而且这些地址会过期，
+ * 所以每次查询都由前端带当前可用的地址，服务端只在缓存未命中时才用它取图。
+ */
+const MATCH_PHOTO_ENDPOINT = AI_MATCH_ENDPOINT.replace(/\/chat$/, '/match-photo');
+
+/** 收集当前可用的宠物照片（含稳定的 storage_path 与当前有效的签名地址）。 */
+function collectPetPhotos() {
+  const list = [];
+  for (const pet of pets || []) {
+    for (const item of pet.media || []) {
+      if (!item.cloudPath || !item.url || item.type !== 'image') continue;
+      list.push({ path: item.cloudPath, url: item.url, petId: pet.id, petName: pet.name, isCover: Boolean(item.isCover) });
+    }
+  }
+  return list.slice(0, 40);
+}
+
+function renderPhotoMatches(container, result) {
+  if (!container) return;
+  const hint = result?.hint || '';
+  const matches = (result?.matches || []).filter(item => item.petId);
+  if (!matches.length) {
+    container.hidden = false;
+    container.innerHTML = `<p class="match-photo-empty">${escapeHtml(hint || '没有找到画面接近的宠物。')}</p>`;
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = `
+    <p class="match-photo-lead">画面最接近的 ${matches.length} 只：</p>
+    ${matches.map(item => {
+      const pet = petById(item.petId);
+      const cover = pet ? mediaUrl(coverMedia(pet)) : '';
+      return `<div class="match-photo-hit">
+        ${cover ? `<img src="${escapeHtml(cover)}" alt="" />` : ''}
+        <div>
+          <strong>${escapeHtml(item.petName || pet?.name || '')}</strong>
+          <p>画面相似度 ${(Number(item.similarity) * 100).toFixed(0)}%</p>
+        </div>
+        <button class="admin-edit" type="button" data-match-photo-ask="${escapeHtml(item.petName || pet?.name || '')}">问问它</button>
+      </div>`;
+    }).join('')}
+    <p class="match-photo-hint">${escapeHtml(hint)}</p>`;
+}
+
+async function handlePhotoSearch(file) {
+  const container = $('#matchPhotoResult');
+  const label = $('#matchPhotoLabel');
+  const previous = label?.textContent;
+  if (label) label.textContent = '正在比对…';
+  if (container) {
+    container.hidden = false;
+    container.innerHTML = '<p class="match-photo-empty">正在读照片并和站内宠物比对，第一次会稍慢…</p>';
+  }
+  try {
+    const image = await downscaleImageToDataUrl(file);
+    const response = await fetch(MATCH_PHOTO_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image, photos: collectPetPhotos(), topK: 3 })
+    });
+    const result = await response.json().catch(() => null);
+    if (!result) throw new Error(`服务返回无法解析的内容（${response.status}）。`);
+    if (result.ok !== true) throw new Error(result.message || '比对失败。');
+    renderPhotoMatches(container, result);
+  } catch (error) {
+    if (container) {
+      container.hidden = false;
+      container.innerHTML = `<p class="match-photo-empty">${escapeHtml(error.message || '比对失败，请稍后重试。')}</p>`;
+    }
+  } finally {
+    if (label) label.textContent = previous || '选择一张照片';
+  }
+}
+
+function initPhotoSearch() {
+  const input = $('#matchPhotoFile');
+  if (!input) return;
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) handlePhotoSearch(file);
+    input.value = '';
+  });
+}
+
 async function matchAsk(preset) {
   const { thread, input } = matchElements();
   if (!thread || matchState.streaming) return;
@@ -2618,6 +2716,7 @@ function initMatchAssistant() {
   if (!thread || !form) return;
   thread.innerHTML = matchWelcomeHtml();
   initMatchVoice();
+  initPhotoSearch();
 
   form.addEventListener('submit', event => {
     event.preventDefault();

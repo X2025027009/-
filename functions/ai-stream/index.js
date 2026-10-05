@@ -27,6 +27,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { createToolkit } = require('./tools');
 const { createKnowledge } = require('./knowledge');
+const { createVision, TOKENHUB_MULTIMODAL_URL, VL_MODEL, VL_DIMENSION } = require('./vision');
 
 const PORT = Number(process.env.PORT) || 9000;
 const DEEPSEEK_HOST = 'https://api.deepseek.com';
@@ -34,6 +35,8 @@ const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
 // ── 输入硬上限 ──────────────────────────────────────────────
 const MAX_BODY_BYTES = 16 * 1024;
+/** 以图搜宠要传 base64 图片，请求体上限单独放大（前端已把图压到 768px 以内）。 */
+const MAX_PHOTO_BODY_BYTES = 1200 * 1024;
 const MAX_MESSAGE_CHARS = 600;
 const MAX_TURNS = 8;
 const MAX_OUTPUT_TOKENS = 900;
@@ -162,6 +165,7 @@ function sqlResult(response) {
 const runSql = async sql => sqlResult(await executePgSql(sql));
 const knowledge = createKnowledge({ query: runSql, embed: texts => embedTexts(texts) });
 const toolkit = createToolkit({ query: runSql, knowledge });
+const vision = createVision({ query: runSql, embedImage: input => embedImage(input) });
 
 /** Agent 最多进行几轮工具调用。超过就强制收口，避免无限循环烧额度。 */
 const MAX_TOOL_ROUNDS = 3;
@@ -526,13 +530,13 @@ async function runAgentWithFallback(res, messages, apiKey) {
   }
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', chunk => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new Error('请求内容过大。'));
         req.destroy();
         return;
@@ -682,6 +686,49 @@ async function runToolSmokeTests({ deep = false } = {}) {
   return report;
 }
 
+/**
+ * 把一张图片转成 2048 维向量（以图搜宠用）。
+ *
+ * 图片用 data URL 直接传，**不落盘、不上传到任何存储**——
+ * 访客上传的是私人照片，没有理由为了比对把它存下来。
+ * 前端会先把图压到 768px 以内，否则 base64 之后请求体放不下。
+ *
+ * 维度做硬校验：写错模型名时这里的报错比"检索结果莫名其妙"好排查得多。
+ */
+async function embedImage(input) {
+  const apiKey = await resolveTokenhubKey();
+  if (!apiKey) throw new Error('尚未配置 TokenHub Key，无法按图片检索。');
+  const url = text(input?.dataUrl, 1200000) || text(input?.url, 2000);
+  if (!url) throw new Error('缺少图片内容。');
+
+  const response = await fetch(TOKENHUB_MULTIMODAL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: VL_MODEL,
+      input: [{ type: 'image_url', image_url: { url } }],
+      encoding_format: 'float'
+    })
+  });
+  const raw = await response.text().catch(() => '');
+  if (!response.ok) {
+    // 上游原文直接带出来：模型名写错、图片格式不支持这类问题，看到原文才知道怎么改
+    throw new Error(`图片向量服务返回 ${response.status}：${text(raw, 300)}`);
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`图片向量服务返回无法解析的内容：${text(raw, 200)}`);
+  }
+  const vector = data?.data?.[0]?.embedding;
+  if (!Array.isArray(vector) || !vector.length) throw new Error('图片向量服务没有返回向量。');
+  if (vector.length !== VL_DIMENSION) {
+    throw new Error(`图片向量维度是 ${vector.length}，与预期的 ${VL_DIMENSION} 不符，请检查模型配置（${VL_MODEL}）。`);
+  }
+  return vector;
+}
+
 async function handleChat(req, res) {
   const base = { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' };
   res.writeHead(200, base);
@@ -742,6 +789,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 以图搜宠：上传一张照片，找出画面特征最接近的站内宠物
+  if (url.includes('/match-photo') && req.method === 'POST') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    try {
+      const body = await readBody(req, MAX_PHOTO_BODY_BYTES);
+      const result = await vision.search({
+        imageDataUrl: body?.image,
+        photos: Array.isArray(body?.photos) ? body.photos : [],
+        topK: body?.topK
+      });
+      res.end(JSON.stringify(result));
+    } catch (error) {
+      console.error('以图搜宠失败：', error.message);
+      res.end(JSON.stringify({ ok: false, message: text(error.message, 300) || '以图搜宠暂时不可用。' }));
+    }
+    return;
+  }
+
   // 工具自检：逐个跑一遍，写错列名这类问题立刻现形
   if (url.includes('/health/tools')) {
     const deep = url.includes('deep=1');
@@ -771,7 +836,11 @@ const server = http.createServer(async (req, res) => {
         hasSessionToken: Boolean(process.env.TENCENTCLOUD_SESSIONTOKEN),
         hasEnvId: Boolean(process.env.TCB_ENV || process.env.SCF_NAMESPACE)
       },
-      endpoints: { 'POST /chat': 'SSE 流式对话，body: {messages:[{role,content}]}' },
+      endpoints: {
+        'POST /chat': 'SSE 流式对话，body: {messages:[{role,content}]}',
+        'POST /match-photo': '以图搜宠，body: {image: dataURL, photos: [{path,url,petId,petName}]}'
+      },
+      vision: { model: VL_MODEL, dimension: VL_DIMENSION },
       // 工具清单只报数量与名字：调用方据此判断 Function Calling 是否已启用
       tools: { count: toolkit.definitions.length, names: toolkit.definitions.map(item => item.function.name) },
       time: new Date().toISOString()
