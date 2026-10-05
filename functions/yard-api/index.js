@@ -533,6 +533,140 @@ async function adminSaveSettings(event, context) {
 }
 
 /**
+ * 读取大模型 API Key。优先级与 ai-stream 保持一致：环境变量 > 数据库。
+ * 结果在实例内缓存 60 秒，避免每次摘要都多一次数据库查询。
+ */
+let cachedAiKey = null;
+let cachedAiKeyAt = 0;
+async function resolveAiKey() {
+  const fromEnv = text(process.env.DEEPSEEK_API_KEY, 200);
+  if (fromEnv) return fromEnv;
+  if (cachedAiKey !== null && Date.now() - cachedAiKeyAt < 60000) return cachedAiKey;
+  try {
+    const response = await executePgSql(
+      "SELECT jsonb_build_object('key', COALESCE((SELECT value->>'apiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), '')) AS result",
+      await resolveSecret()
+    );
+    cachedAiKey = text(sqlResult(response)?.key, 200);
+  } catch {
+    cachedAiKey = '';
+  }
+  cachedAiKeyAt = Date.now();
+  return cachedAiKey;
+}
+
+/**
+ * 条件比对兜底：没有模型（或模型失败）时用规则给出初步结果，
+ * 保证管理员的功能不会整体失效——只是精度下降，并如实标注来源。
+ */
+function ruleBasedFit(application, pet) {
+  const requirements = text(pet?.requirements, 1000);
+  const haystack = `${text(application.note, 1000)} ${text(application.family, 50)}`;
+  const checks = [
+    ['家庭成员意见', application.family === '全部同意' ? '满足' : application.family === '尚未沟通' ? '缺失' : '需确认', `申请填写：${text(application.family, 20) || '未填写'}`],
+    ['成都及周边住所', application.home === true ? '满足' : '缺失', '关系到能否就近回访'],
+    ['养宠经验', application.experience && application.experience !== '没有' ? '满足' : '需确认', `申请填写：${text(application.experience, 20) || '未填写'}`],
+    ['现有宠物相处', text(application.otherPets, 20) && application.otherPets !== '没有' ? '需确认' : '满足', `申请填写：${text(application.otherPets, 20) || '未填写'}`],
+    ['封窗／防护', /封窗|防护|纱窗/.test(haystack) ? '满足' : (/封窗|防护/.test(requirements) ? '缺失' : '未提及'), '养猫尤其需要确认']
+  ];
+  return checks.map(([label, status, note]) => ({ label, status, note }));
+}
+
+/**
+ * AI 申请摘要与条件比对（管理员侧）。
+ *
+ * 定位：**只做信息整理与提示，不做录取决定**，决定权始终在管理员。
+ * 只把「这条申请 + 这只宠物的领养要求」发给模型，不含其它申请人数据。
+ */
+async function summarizeApplication(event, context) {
+  await requireAdmin(context);
+  const applicationId = text(event.applicationId, 120);
+  if (!applicationId) throw new Error('缺少申请编号。');
+
+  const payload = sqlResult(await executePgSql(
+    `SELECT COALESCE((
+       SELECT jsonb_build_object(
+         'applicant', jsonb_build_object(
+           'name', a.applicant_name, 'age', a.applicant_age, 'gender', a.applicant_gender,
+           'type', a.application_type, 'home', a.has_chengdu_home, 'experience', a.experience,
+           'family', a.family_agreement, 'otherPets', a.other_pets, 'note', a.note),
+         'pet', jsonb_build_object(
+           'name', p.name, 'type', p.pet_type, 'status', p.adoption_status,
+           'age', p.age_text, 'health', p.health, 'requirements', p.requirements)
+       )
+       FROM public.applications a
+       LEFT JOIN public.pets p ON p.id = a.pet_id
+       WHERE a.id = ${sqlLiteral(applicationId)}
+       LIMIT 1
+     ), 'null'::jsonb) AS result`,
+    await resolveSecret()
+  ));
+  const detail = payload?.applicant ? payload : null;
+  if (!detail) throw new Error('没有找到这条申请，可能已经被删除，请刷新后台后重试。');
+  const fallbackHeadline = `${text(detail.applicant.name, 20) || '申请人'} · 意向「${text(detail.pet?.name, 20) || '未知'}」`;
+
+  const apiKey = await resolveAiKey();
+  if (!apiKey) {
+    return {
+      ok: true, mock: true, mode: '演示模式（未配置模型 Key，以下为规则比对结果）',
+      summary: {
+        headline: fallbackHeadline,
+        fit: ruleBasedFit(detail.applicant, detail.pet),
+        questions: ['居住地是否允许养宠（租房请确认房东态度）', '白天家中是否有人陪伴', '家庭成员是否全部同意'],
+        caution: '尚未接入模型，以上为规则比对结果，仅供初步筛选。'
+      }
+    };
+  }
+
+  const systemPrompt = `你是流浪动物救助站的管理员助手。管理员需要逐条核对领养申请与宠物的领养要求。
+只依据给定信息整理，**不要编造申请人没有提供的内容**；信息缺失就明确写「未提及」。
+只输出 JSON 对象，不要任何额外文字，格式：
+{"headline":"一句话概括这位申请人（40字内）","fit":[{"label":"核对项","status":"满足|缺失|未提及|需确认","note":"依据"}],"questions":["电话沟通建议问的问题，1-3条"],"caution":"最需要注意的一个风险点，一句话"}`;
+  const userPrompt = `【申请信息】${JSON.stringify(detail.applicant)}\n【宠物与领养要求】${JSON.stringify(detail.pet)}`;
+
+  try {
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+        stream: false,
+        temperature: 0.3,
+        max_tokens: 900,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
+      })
+    });
+    if (!response.ok) throw new Error(`模型返回 ${response.status}`);
+    const data = await response.json();
+    const parsed = JSON.parse(text(data?.choices?.[0]?.message?.content, 4000));
+    if (!parsed?.headline) throw new Error('模型返回内容缺少必要字段');
+    return {
+      ok: true, mock: false, mode: '由 AI 生成',
+      summary: {
+        headline: text(parsed.headline, 120),
+        fit: Array.isArray(parsed.fit) ? parsed.fit.slice(0, 8).map(item => ({
+          label: text(item?.label, 40), status: text(item?.status, 20), note: text(item?.note, 200)
+        })) : [],
+        questions: Array.isArray(parsed.questions) ? parsed.questions.slice(0, 3).map(item => text(item, 200)) : [],
+        caution: text(parsed.caution, 200)
+      }
+    };
+  } catch (error) {
+    // 模型失败不能挡住管理员干活：退回规则摘要，并如实说明原因
+    return {
+      ok: true, mock: true, mode: `模型调用失败（${text(error.message, 80)}），以下为规则比对结果`,
+      summary: {
+        headline: fallbackHeadline,
+        fit: ruleBasedFit(detail.applicant, detail.pet),
+        questions: ['居住地是否允许养宠', '白天家中是否有人陪伴'],
+        caution: '模型暂不可用，以上为规则比对结果。'
+      }
+    };
+  }
+}
+
+/**
  * 删除一条申请记录。
  *
  * 走云函数的特权通道（ExecutePGSql），而不是让前端直接删数据库。
@@ -595,6 +729,7 @@ exports.main = async (event = {}, context = {}) => {
   if (action === 'admin.inbox') return asReadableResult(() => adminInbox(context), '读取申请收件箱失败。');
   if (action === 'admin.application.update') return asReadableResult(() => updateApplication(event, context), '更新申请失败。');
   if (action === 'admin.application.delete') return asReadableResult(() => adminDeleteApplication(event, context), '删除申请失败。');
+  if (action === 'admin.application.summarize') return asReadableResult(() => summarizeApplication(event, context), '生成申请摘要失败。');
   if (action === 'admin.pet.save') return asReadableResult(() => adminSavePet(event, context), '保存宠物档案失败。');
   if (action === 'admin.settings.save') return asReadableResult(() => adminSaveSettings(event, context), '保存网站设置失败。');
   throw new Error('未知操作。');

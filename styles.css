@@ -588,6 +588,64 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
 /* 管理员后台里 AI Key 的配置状态：已配置用鼠尾草绿，未配置保持中性 */
 .ai-key-status.is-ok { color: var(--sage); }
 
+/* ── 管理员后台：AI 申请摘要 ──────────────────────────────────
+   沿用站点既有设计变量。核对项用状态色区分（满足/缺失/需确认），
+   让管理员扫一眼就能抓住缺口，不必逐字读完申请。 */
+.application-ai-summary {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--soft-line);
+  border-radius: var(--radius);
+  background: var(--cream);
+}
+
+.ai-summary-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.ai-summary-head strong { font-family: var(--serif); font-size: 15px; }
+.ai-summary-mode { font-size: 12px; color: var(--muted); }
+.ai-summary-mode.is-fallback { color: var(--clay); }
+
+.ai-summary-headline { margin: 0 0 10px; font-weight: 700; font-size: 14.5px; line-height: 1.6; }
+
+.ai-fit-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.ai-fit-row {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--soft-line);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ai-fit-status { font-size: 12px; font-weight: 800; text-align: center; border-radius: 6px; padding: 1px 0; }
+.ai-fit-row.is-ok .ai-fit-status { background: rgba(120, 144, 122, .16); color: var(--sage); }
+.ai-fit-row.is-bad .ai-fit-status { background: rgba(201, 119, 88, .16); color: var(--clay); }
+.ai-fit-row.is-warn .ai-fit-status { background: var(--pale-yellow); color: var(--ink); }
+.ai-fit-note { grid-column: 2; color: var(--muted); font-size: 12.5px; }
+
+.ai-summary-block { margin-top: 12px; }
+.ai-summary-block h5 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 800; }
+.ai-summary-block ul { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.75; }
+
+.ai-summary-caution {
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #fdf1ec;
+  border: 1px solid rgba(201, 119, 88, .3);
+  color: var(--clay);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.ai-summary-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+@media (max-width: 680px) {
+  .ai-fit-row { grid-template-columns: 1fr; }
+  .ai-fit-note { grid-column: 1; }
+}
+
 @media (max-width: 680px) {
   .match-panel { padding: 16px; }
   .match-bubble { max-width: 96%; }

@@ -1182,8 +1182,10 @@ function renderAdminApplications() {
         <textarea id="application-note-${escapeHtml(app.id)}" name="internalNote" placeholder="例如：已电话沟通，等待家人确认。此内容不会公开。">${escapeHtml(app.internalNote || '')}</textarea>
         <div class="application-action-buttons">
           <button class="admin-primary" type="submit">保存处理结果</button>
+          <button class="admin-edit" type="button" data-summarize-application="${escapeHtml(app.id)}">AI 摘要</button>
           <button class="admin-delete" type="button" data-delete-application="${escapeHtml(app.id)}">删除申请</button>
         </div>
+        <div class="application-ai-summary" data-ai-summary-for="${escapeHtml(app.id)}" hidden></div>
       </form>
     </article>`;
   }).join('');
@@ -1618,6 +1620,55 @@ async function handlePetDelete(id) {
     toast(error.message || '宠物档案删除失败，请稍后重试。');
   }
 }
+/**
+ * 渲染 AI 申请摘要。
+ *
+ * 呈现上刻意把「核对结果」和「建议追问」分开，并保留一行来源说明
+ * （由 AI 生成 / 规则比对 / 模型失败），避免管理员把兜底结果当成模型结论。
+ */
+function renderApplicationSummary(container, result) {
+  if (!container) return;
+  const summary = result?.summary;
+  if (!summary) { container.hidden = true; return; }
+
+  const statusClass = status => /满足/.test(status) ? 'is-ok' : /缺失/.test(status) ? 'is-bad' : 'is-warn';
+  const fitRows = (summary.fit || []).map(item => `
+    <li class="ai-fit-row ${statusClass(item.status || '')}">
+      <span class="ai-fit-status">${escapeHtml(item.status || '')}</span>
+      <strong>${escapeHtml(item.label || '')}</strong>
+      ${item.note ? `<span class="ai-fit-note">${escapeHtml(item.note)}</span>` : ''}
+    </li>`).join('');
+  const questions = (summary.questions || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+
+  container.hidden = false;
+  container.innerHTML = `
+    <div class="ai-summary-head">
+      <strong>AI 摘要</strong>
+      <span class="ai-summary-mode${result.mock ? ' is-fallback' : ''}">${escapeHtml(result.mode || '')}</span>
+    </div>
+    <p class="ai-summary-headline">${escapeHtml(summary.headline || '')}</p>
+    ${fitRows ? `<ul class="ai-fit-list">${fitRows}</ul>` : ''}
+    ${questions ? `<div class="ai-summary-block"><h5>建议电话里问</h5><ul>${questions}</ul></div>` : ''}
+    ${summary.caution ? `<p class="ai-summary-caution">${escapeHtml(summary.caution)}</p>` : ''}
+    <p class="ai-summary-note">AI 只做信息整理与提示，是否通过由你来判断。</p>`;
+}
+async function handleApplicationSummarize(id, button) {
+  const container = $(`[data-ai-summary-for="${id}"]`);
+  const previous = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = '生成中…'; }
+  try {
+    const result = await callYardApi({ action: 'admin.application.summarize', applicationId: id });
+    if (result?.ok !== true) throw new Error(result?.message || '生成摘要失败。');
+    renderApplicationSummary(container, result);
+  } catch (error) {
+    if (container) {
+      container.hidden = false;
+      container.innerHTML = `<p class="ai-summary-caution">生成摘要失败：${escapeHtml(error.message || '请稍后重试')}</p>`;
+    }
+  } finally {
+    if (button) { button.disabled = false; button.textContent = previous || 'AI 摘要'; }
+  }
+}
 async function handleApplicationDelete(id) {
   const application = adminApplications().find(item => item.id === id);
   if (!application) { toast('没有找到这条申请，请刷新管理员后台后重试。'); return; }
@@ -1753,6 +1804,8 @@ document.addEventListener('click', event => {
   if (filterButton) { setFilter(filterButton.dataset.filter, filterButton.dataset.value); return; }
   const deleteApplicationButton = event.target.closest('[data-delete-application]');
   if (deleteApplicationButton) { handleApplicationDelete(deleteApplicationButton.dataset.deleteApplication); return; }
+  const summarizeButton = event.target.closest('[data-summarize-application]');
+  if (summarizeButton) { handleApplicationSummarize(summarizeButton.dataset.summarizeApplication, summarizeButton); return; }
   const deletePetButton = event.target.closest('[data-delete-pet]');
   if (deletePetButton) { handlePetDelete(deletePetButton.dataset.deletePet); return; }
   if (event.target.closest('#adminButton, #footerAdmin')) { openAdmin(); return; }
