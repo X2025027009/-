@@ -661,6 +661,30 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
   font-size: 12px;
 }
 
+/* 语音输入按钮：录音中用暖黄底 + 呼吸动画，明确"正在听" */
+.match-voice { display: inline-flex; align-items: center; gap: 6px; }
+.match-voice-icon { font-size: 14px; line-height: 1; }
+.match-voice.is-listening {
+  background: var(--pale-yellow);
+  border-color: rgba(244, 201, 107, .9);
+  animation: match-tool-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .match-voice.is-listening { animation: none; }
+}
+
+/* 朗读按钮：与「依据」同一行样式，但可点击 */
+.match-speak {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--soft-line);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.match-speak:hover { color: var(--ink); border-color: var(--clay); }
+
 /* AI 查询状态：比正文轻、比正文小，带一个呼吸动画表示还在进行 */
 .match-tool-status {
   align-self: flex-start;

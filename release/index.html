@@ -125,6 +125,9 @@
             <textarea id="matchInput" name="message" rows="2" maxlength="600" placeholder="例如：我和家人一起住，白天有人在家，有养猫经验，想找一只性格温和的狗狗。" required></textarea>
             <div class="match-actions">
               <button class="button button-primary" type="submit" id="matchSubmit">开始匹配</button>
+              <button class="button button-ghost match-voice" type="button" id="matchVoice" hidden aria-pressed="false">
+                <span class="match-voice-icon" aria-hidden="true">🎤</span><span id="matchVoiceText">语音输入</span>
+              </button>
               <button class="button button-ghost" type="button" id="matchReset" hidden>重新开始</button>
             </div>
           </form>

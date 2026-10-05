@@ -1026,6 +1026,93 @@ async function summarizeApplication(event, context) {
 }
 
 /**
+ * 读取 TokenHub Key（向量化与视觉理解用）。
+ * 与 ai-stream 相同的优先级与缓存策略：环境变量 > 数据库，实例内缓存 60 秒。
+ */
+let cachedTokenhubKey = null;
+let cachedTokenhubKeyAt = 0;
+async function resolveTokenhubKey() {
+  const fromEnv = text(process.env.TOKENHUB_API_KEY, 200);
+  if (fromEnv) return fromEnv;
+  if (cachedTokenhubKey !== null && Date.now() - cachedTokenhubKeyAt < 60000) return cachedTokenhubKey;
+  try {
+    const response = await executePgSql(
+      "SELECT jsonb_build_object('key', COALESCE((SELECT value->>'tokenhubApiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), '')) AS result",
+      await resolveSecret()
+    );
+    cachedTokenhubKey = text(sqlResult(response)?.key, 200);
+  } catch {
+    cachedTokenhubKey = '';
+  }
+  cachedTokenhubKeyAt = Date.now();
+  return cachedTokenhubKey;
+}
+
+const TOKENHUB_CHAT_URL = 'https://tokenhub.tencentmaas.com/v1/chat/completions';
+const TOKENHUB_VISION_MODEL = process.env.TOKENHUB_VISION_MODEL || 'hy-vision-2.0-instruct';
+
+/**
+ * 用视觉模型读宠物照片，生成档案描述初稿。
+ *
+ * 定位：**给管理员一个起点，不是替他写档案**。
+ * 返回的文字会填进描述框，管理员可以随意修改——
+ * 照片里看不出来的东西（性格、病史、是否亲人）AI 编不出来，也不该编。
+ */
+async function describePetPhoto(event, context) {
+  await requireAdmin(context);
+  const image = text(event.image, 1200000);
+  if (!image.startsWith('data:image/')) throw new Error('请提供图片数据。');
+  const apiKey = await resolveTokenhubKey();
+  if (!apiKey) throw new Error('尚未配置 TokenHub Key，无法识别照片。');
+
+  const species = text(event.species, 10);
+  const prompt = [
+    '你在帮流浪动物救助站的管理员整理宠物档案。',
+    '请根据这张照片，写一段 60 字以内的中文描述，供管理员填进「简短介绍」。',
+    species ? `这只动物是${species}。` : '',
+    '**只描述照片里看得见的东西**：毛色与花纹、体型、耳朵与尾巴的特征、大致年龄感、精神状态、看起来是否亲人。',
+    '**不要臆测性格、病史、是否绝育、是否打过疫苗**——这些照片看不出来。',
+    '不要写"这只可爱的猫咪"这类套话，直接写具体特征。只输出描述本身，不要任何前后缀。'
+  ].filter(Boolean).join('\n');
+
+  const response = await fetch(TOKENHUB_CHAT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: TOKENHUB_VISION_MODEL,
+      stream: false,
+      temperature: 0.3,
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: image } }
+          ]
+        }
+      ]
+    })
+  });
+  // 上游原始信息一律带回：模型名写错、图片格式不支持这类问题，
+  // 只有看到原文才知道该怎么改
+  const raw = await response.text().catch(() => '');
+  if (!response.ok) {
+    return { ok: false, message: `视觉服务返回 ${response.status}：${text(raw, 300)}` };
+  }
+  // 不设初值：解析失败会直接 return，初值永远读不到
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return { ok: false, message: `视觉服务返回无法解析的内容：${text(raw, 200)}` };
+  }
+  const description = text(data?.choices?.[0]?.message?.content, 400).replace(/^["「『]|["」』]$/g, '').trim();
+  if (!description) return { ok: false, message: '视觉服务没有返回描述内容。' };
+  return { ok: true, description, model: TOKENHUB_VISION_MODEL, usage: data?.usage || null };
+}
+
+/**
  * 删除一条申请记录。
  *
  * 走云函数的特权通道（ExecutePGSql），而不是让前端直接删数据库。
@@ -1102,6 +1189,7 @@ exports.main = async (event = {}, context = {}) => {
   if (action === 'admin.application.delete') return asReadableResult(() => adminDeleteApplication(event, context), '删除申请失败。');
   if (action === 'admin.application.summarize') return asReadableResult(() => summarizeApplication(event, context), '生成申请摘要失败。');
   if (action === 'admin.ai.diagnose') return asReadableResult(() => diagnoseAiConfig(context), 'AI 配置自检失败。');
+  if (action === 'admin.pet.describePhoto') return asReadableResult(() => describePetPhoto(event, context), '识别照片失败。');
   if (action === 'admin.pet.save') return asReadableResult(() => adminSavePet(event, context), '保存宠物档案失败。');
   if (action === 'admin.settings.save') return asReadableResult(() => adminSaveSettings(event, context), '保存网站设置失败。');
   throw new Error('未知操作。');

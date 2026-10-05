@@ -1066,7 +1066,7 @@ function renderPetEditor(pet) {
         <div class="field full"><label>上传生活照片（可多选）</label><input id="petGalleryFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple /><span class="form-hint">选择多张照片后会逐张打开裁切窗口；完成裁切后再保存档案。</span></div>
         <div class="field full"><label>外部视频链接（备用，可选）</label><textarea name="videoLinks" placeholder="如果视频在抖音、视频号或 B 站，可粘贴链接；直接上传视频后不需要填写。"></textarea></div>
         <div class="field full"><label>上传短视频（可多选）</label><input id="petVideoFiles" type="file" accept="video/mp4" multiple /><span class="form-hint">建议 MP4、每个不超过 60 MB、时长不超过 90 秒。</span>${currentMediaNotice}</div>
-        <div class="field full"><label>简短介绍</label><textarea name="description" required>${escapeHtml(pet.description)}</textarea></div>
+        <div class="field full"><label>简短介绍</label><textarea name="description" required>${escapeHtml(pet.description)}</textarea><button class="admin-edit" type="button" data-describe-photo>用封面照片自动写一段</button><span class="form-hint">选好封面照片后点一下，AI 会读照片写一段描述初稿。<strong>它只写照片里看得见的东西</strong>（毛色、体型、精神状貌），性格与病史照片看不出来，仍需你自己判断填写。</span></div>
         <div class="field full"><label>健康情况</label><textarea name="health" required>${escapeHtml(pet.health)}</textarea></div>
         <div class="field full"><label>默认 / 单独领养要求</label><textarea name="requirements" required>${escapeHtml(pet.requirements)}</textarea></div>
         <div class="field full"><label>暂不适合领养说明（仅该状态需要）</label><textarea name="reason">${escapeHtml(pet.reason)}</textarea></div>
@@ -1771,6 +1771,63 @@ async function handleDiagnoseAi(button) {
     if (button) { button.disabled = false; button.textContent = previous || '检查 AI 配置'; }
   }
 }
+/**
+ * 把本地图片压缩成 data URL。
+ *
+ * 为什么要压：原图动辄几 MB，转成 base64 会更大，请求体直接超限。
+ * 视觉模型也不需要那么高的分辨率，压到 768px、JPEG 0.82 足够看清毛色与体型，
+ * 体积从几 MB 降到几十 KB。
+ */
+function downscaleImageToDataUrl(file, maxSize = 768) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取图片失败。'));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('这个文件不是能识别的图片格式。'));
+      image.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(image.width || 1, image.height || 1));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round((image.width || 1) * scale));
+        canvas.height = Math.max(1, Math.round((image.height || 1) * scale));
+        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      image.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleDescribePhoto(button) {
+  const file = $('#petCoverFile')?.files?.[0];
+  if (!file) {
+    toast('请先选择封面照片，再点「用封面照片自动写一段」。');
+    return;
+  }
+  const form = button.closest('form');
+  const textarea = form?.querySelector('textarea[name="description"]');
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = '正在读照片…';
+  try {
+    const image = await downscaleImageToDataUrl(file);
+    const species = form?.querySelector('select[name="petType"]')?.value || '';
+    const result = await callYardApi({ action: 'admin.pet.describePhoto', image, species });
+    if (result?.ok !== true) throw new Error(result?.message || '识别失败。');
+    if (textarea) {
+      textarea.value = result.description;
+      textarea.focus();
+    }
+    toast('已写入描述，请按实际情况修改后再保存');
+  } catch (error) {
+    toast(error.message || '识别失败，请稍后重试。');
+  } finally {
+    button.disabled = false;
+    button.textContent = previous || '用封面照片自动写一段';
+  }
+}
+
 async function handleApplicationDelete(id) {
   const application = adminApplications().find(item => item.id === id);
   if (!application) { toast('没有找到这条申请，请刷新管理员后台后重试。'); return; }
@@ -1909,6 +1966,8 @@ document.addEventListener('click', event => {
   const summarizeButton = event.target.closest('[data-summarize-application]');
   if (summarizeButton) { handleApplicationSummarize(summarizeButton.dataset.summarizeApplication, summarizeButton); return; }
   if (event.target.closest('[data-diagnose-ai]')) { handleDiagnoseAi(event.target.closest('[data-diagnose-ai]')); return; }
+  const describeButton = event.target.closest('[data-describe-photo]');
+  if (describeButton) { handleDescribePhoto(describeButton); return; }
   const deletePetButton = event.target.closest('[data-delete-pet]');
   if (deletePetButton) { handlePetDelete(deletePetButton.dataset.deletePet); return; }
   if (event.target.closest('#adminButton, #footerAdmin')) { openAdmin(); return; }
@@ -2340,6 +2399,119 @@ function matchAppendSources(items) {
   thread.scrollTop = thread.scrollHeight;
 }
 
+/**
+ * 语音输入（浏览器原生 Web Speech API）。
+ *
+ * 为什么值得做：小院会遇到不擅长打字的申请人——代码里早就有一句注释
+ * 写着「上了年纪的申请人自己改不动网站」。让他们用说的，比逼他们打字现实得多。
+ *
+ * 几点取舍：
+ *   - 用浏览器自带能力，不接第三方语音服务：零成本、无需额外密钥；
+ *   - 识别结果直接追加到输入框，申请人可以在发送前自己修改——
+ *     语音识别会出错，不能识别完就替他发出去；
+ *   - 浏览器不支持时按钮直接隐藏，不显示一个点了没反应的按钮。
+ */
+const matchVoiceState = { recognition: null, listening: false, baseText: '' };
+
+function matchVoiceSupported() {
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function matchVoiceSetLabel(listening) {
+  const button = $('#matchVoice');
+  const label = $('#matchVoiceText');
+  if (button) {
+    button.classList.toggle('is-listening', listening);
+    button.setAttribute('aria-pressed', listening ? 'true' : 'false');
+  }
+  if (label) label.textContent = listening ? '正在听…' : '语音输入';
+}
+
+function matchVoiceStop() {
+  matchVoiceState.recognition?.stop();
+  matchVoiceSetLabel(false);
+}
+
+function initMatchVoice() {
+  const button = $('#matchVoice');
+  if (!button) return;
+  if (!matchVoiceSupported()) {
+    button.hidden = true;
+    return;
+  }
+  button.hidden = false;
+  button.addEventListener('click', () => {
+    if (matchVoiceState.listening) { matchVoiceStop(); return; }
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new Recognition();
+    recognition.lang = 'zh-CN';
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    const input = $('#matchInput');
+    matchVoiceState.baseText = String(input?.value || '').trim();
+    matchVoiceState.recognition = recognition;
+    matchVoiceState.listening = true;
+    matchVoiceSetLabel(true);
+
+    recognition.onresult = event => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        transcript += event.results[i][0].transcript;
+      }
+      if (input) {
+        input.value = [matchVoiceState.baseText, transcript.trim()].filter(Boolean).join(' ').slice(0, 600);
+      }
+    };
+    recognition.onerror = event => {
+      matchVoiceState.listening = false;
+      matchVoiceSetLabel(false);
+      const reason = event?.error === 'not-allowed'
+        ? '浏览器没有麦克风权限，请在地址栏允许后重试。'
+        : '语音识别没能启动，可以直接打字。';
+      toast(reason);
+    };
+    recognition.onend = () => {
+      matchVoiceState.listening = false;
+      matchVoiceSetLabel(false);
+    };
+    try {
+      recognition.start();
+    } catch {
+      matchVoiceState.listening = false;
+      matchVoiceSetLabel(false);
+    }
+  });
+}
+
+/**
+ * 给回答加一个「朗读」入口。
+ *
+ * 手机上看长回答费眼，读出来更省事；对视力不好的申请人也友好。
+ * 同样用浏览器原生能力，不依赖任何外部服务。
+ */
+function matchAppendSpeak(text) {
+  const { thread } = matchElements();
+  if (!thread || !text || !window.speechSynthesis) return;
+  const row = document.createElement('div');
+  row.className = 'match-sources';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'match-speak';
+  button.textContent = '朗读这段回答';
+  button.addEventListener('click', () => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    button.textContent = '朗读中…';
+    utterance.onend = () => { button.textContent = '朗读这段回答'; };
+    utterance.onerror = () => { button.textContent = '朗读这段回答'; };
+    window.speechSynthesis.speak(utterance);
+  });
+  row.appendChild(button);
+  thread.appendChild(row);
+  thread.scrollTop = thread.scrollHeight;
+}
+
 async function matchAsk(preset) {
   const { thread, input } = matchElements();
   if (!thread || matchState.streaming) return;
@@ -2411,6 +2583,7 @@ async function matchAsk(preset) {
       // 依据放在回答下方：AI 检索到了哪些资料，访客可以自己核对。
       // 不依赖模型在正文里引用——它可能忘了说，而"依据可查"不能靠它自觉。
       matchAppendSources(sources);
+      matchAppendSpeak(answer);
     } else {
       bubble.classList.add('is-error');
       bubble.textContent = failure || 'AI 这次没有给出回复，请再试一次。';
@@ -2444,6 +2617,7 @@ function initMatchAssistant() {
   const { thread, form, input, reset } = matchElements();
   if (!thread || !form) return;
   thread.innerHTML = matchWelcomeHtml();
+  initMatchVoice();
 
   form.addEventListener('submit', event => {
     event.preventDefault();
