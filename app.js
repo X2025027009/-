@@ -105,6 +105,19 @@ let cloudWecomStatus = null;
  * 管理员不需要回看它，前端也就没有理由持有它。
  */
 let cloudAiKey = { loaded: false, configured: false, hint: '' };
+// TokenHub 的 Key：用于文本向量、多模态向量与视觉理解（RAG 与以图搜宠的基础）。
+let cloudTokenhubKey = { loaded: false, configured: false, hint: '' };
+
+/**
+ * 把密钥渲染成可安全展示的掩码。
+ *
+ * 短于 12 位的（多数非标准 Key）只显示首尾各 2 位，避免把整个密钥暴露出来。
+ */
+function maskKey(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  return text.length > 12 ? `${text.slice(0, 4)}••••••${text.slice(-4)}` : `${text.slice(0, 2)}••••`;
+}
 let filters = { status: '待领养', type: '全部' };
 let adminTab = 'overview';
 let adminEditing = null;
@@ -922,6 +935,7 @@ async function loadAdminPrivateSettings() {
   cloudWecomWebhookLoaded = false;
   cloudWecomStatus = null;
   cloudAiKey = { loaded: false, configured: false, hint: '' };
+  cloudTokenhubKey = { loaded: false, configured: false, hint: '' };
   if (!adminAuthUser || !cloudDb) return;
   try {
     const result = await cloudDb.from('yard_settings').select('key,value').in('key', ['wecom_webhook', 'ai_config']).limit(5);
@@ -934,12 +948,11 @@ async function loadAdminPrivateSettings() {
     }
     cloudWecomWebhookLoaded = true;
 
-    const apiKey = String(list.find(item => item.key === 'ai_config')?.value?.apiKey || '');
-    cloudAiKey = {
-      loaded: true,
-      configured: Boolean(apiKey),
-      hint: apiKey ? `${apiKey.slice(0, 3)}••••••${apiKey.slice(-4)}` : ''
-    };
+    const aiConfig = list.find(item => item.key === 'ai_config')?.value || {};
+    const apiKey = String(aiConfig.apiKey || '');
+    cloudAiKey = { loaded: true, configured: Boolean(apiKey), hint: maskKey(apiKey) };
+    const tokenhubKey = String(aiConfig.tokenhubApiKey || '');
+    cloudTokenhubKey = { loaded: true, configured: Boolean(tokenhubKey), hint: maskKey(tokenhubKey) };
   } catch (error) {
     toast(error.message || '管理员设置读取失败');
   }
@@ -1209,6 +1222,7 @@ function renderAdminSettings() {
         <div class="field full"><label>首页简介</label><textarea name="intro">${escapeHtml(settings.intro)}</textarea></div>
         <div class="field full"><label for="wecomWebhook">企业微信机器人地址</label><input id="wecomWebhook" name="wecomWebhook" value="${escapeHtml(cloudWecomWebhook)}" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." autocomplete="off" /><span class="form-hint">在企业微信群里点「群机器人 → 添加机器人」，把拿到的 Webhook 地址粘贴到这里。保存后，下一位访客提交申请时群里就会收到提醒。提醒只包含宠物、类型和时间，不会发送申请人姓名、电话、住址等隐私。留空表示关闭提醒。</span>${wecomStatusHint()}</div>
         <div class="field full"><label for="aiApiKey">AI 模型 API Key（DeepSeek）</label><input id="aiApiKey" name="aiApiKey" placeholder="${cloudAiKey.configured ? '如需更换请填入新的 Key，留空表示保持现状' : 'sk-...'}" autocomplete="off" /><span class="form-hint ${cloudAiKey.configured ? 'ai-key-status is-ok' : 'ai-key-status'}">${cloudAiKey.configured ? `已配置（${escapeHtml(cloudAiKey.hint)}）：AI 匹配助手使用真实模型。` : '尚未配置：AI 匹配助手运行在演示模式，回复由内置示例生成，不会调用真实模型。'}出于安全考虑不回显完整密钥，填入新值即视为替换。该密钥只保存在管理员专属设置中，匿名访客读不到，也不会出现在任何前端代码或仓库里。</span></div>
+        <div class="field full"><label for="tokenhubApiKey">腾讯云 TokenHub API Key（向量检索与图像理解）</label><input id="tokenhubApiKey" name="tokenhubApiKey" placeholder="${cloudTokenhubKey.configured ? '如需更换请填入新的 Key，留空表示保持现状' : '在 TokenHub 控制台「API Key 管理」创建'}" autocomplete="off" /><span class="form-hint ${cloudTokenhubKey.configured ? 'ai-key-status is-ok' : 'ai-key-status'}">${cloudTokenhubKey.configured ? `已配置（${escapeHtml(cloudTokenhubKey.hint)}）：可按档案语义检索、可用照片搜宠物。` : '尚未配置：宠物检索暂时只能靠关键词匹配，也不能用照片搜宠物。'}用于把宠物档案、领养政策、回访记录转换成向量以便按**意思**检索，以及把照片转换成向量做「以图搜宠」。与上面的对话 Key 互不影响，各自独立保存。同样不回显完整密钥。</span></div>
       </div>
       <button class="button button-primary form-submit" type="submit">保存网站设置</button>
     </form>`;
@@ -1369,17 +1383,21 @@ async function saveWeComWebhookToCloud(value) {
   return true;
 }
 /**
- * 保存 AI 模型 API Key。
+ * 保存 AI 相关配置（DeepSeek / TokenHub 的 Key）。
  *
  * 同样存在 yard_settings 的管理员专属 key 里（`ai_config`）：
  * 不进代码、不进仓库、不用重新部署云函数，随时可换。
- * 云函数 ai-stream 会优先读环境变量，其次读这个值；都没配时走演示模式。
+ *
+ * **只更新传入的字段，其余保持不变** —— 先读再合并再写。
+ * 否则填 TokenHub Key 时会把 DeepSeek Key 整列覆盖掉。
  */
-async function saveAiConfigToCloud(value) {
+async function saveAiConfigToCloud(patch) {
   if (!cloudState.connected || !cloudDb || !adminAuthUser) return false;
+  const current = await cloudDb.from('yard_settings').select('value').eq('key', 'ai_config').limit(1);
+  const existing = cloudRows(current, '读取 AI 配置')[0]?.value || {};
   const result = await cloudDb.from('yard_settings').upsert({
     key: 'ai_config',
-    value: { apiKey: value, updatedAt: new Date().toISOString() },
+    value: { ...existing, ...patch, updatedAt: new Date().toISOString() },
     updated_at: new Date().toISOString()
   }, { onConflict: 'key' });
   if (result?.error) throw new Error(result.error.message || 'AI 配置保存失败。');
@@ -1421,6 +1439,8 @@ async function saveWebsiteSettings(event) {
   // AI Key 与机器人地址同理：只有确实读到过旧值时才允许清空，避免读取失败误清已配置的密钥。
   const aiKeyValue = String(new FormData(form).get('aiApiKey') || '').trim();
   const shouldSaveAiKey = Boolean(aiKeyValue);
+  const tokenhubKeyValue = String(new FormData(form).get('tokenhubApiKey') || '').trim();
+  const shouldSaveTokenhubKey = Boolean(tokenhubKeyValue);
   if (qrFile && !validContactQrFile(qrFile)) {
     toast('微信二维码请选择 JPG、PNG 或 WebP 图片，且文件不超过 8 MB。');
     return;
@@ -1459,9 +1479,16 @@ async function saveWebsiteSettings(event) {
     }
     let aiKeySaved = false;
     if (shouldSaveAiKey) {
-      aiKeySaved = await saveAiConfigToCloud(aiKeyValue);
+      aiKeySaved = await saveAiConfigToCloud({ apiKey: aiKeyValue });
       if (aiKeySaved) {
-        cloudAiKey = { loaded: true, configured: true, hint: `${aiKeyValue.slice(0, 3)}••••••${aiKeyValue.slice(-4)}` };
+        cloudAiKey = { loaded: true, configured: true, hint: maskKey(aiKeyValue) };
+      }
+    }
+    let tokenhubKeySaved = false;
+    if (shouldSaveTokenhubKey) {
+      tokenhubKeySaved = await saveAiConfigToCloud({ tokenhubApiKey: tokenhubKeyValue });
+      if (tokenhubKeySaved) {
+        cloudTokenhubKey = { loaded: true, configured: true, hint: maskKey(tokenhubKeyValue) };
       }
     }
     settings = nextSettings;
@@ -1476,8 +1503,14 @@ async function saveWebsiteSettings(event) {
       toast('网站设置已保存，但企业微信机器人地址没能写入云端，请连接云端后重新保存一次。');
     } else if (shouldSaveAiKey && !aiKeySaved) {
       toast('网站设置已保存，但 AI 模型 Key 没能写入云端，请连接云端后重新保存一次。');
+    } else if (shouldSaveTokenhubKey && !tokenhubKeySaved) {
+      toast('网站设置已保存，但 TokenHub Key 没能写入云端，请连接云端后重新保存一次。');
+    } else if (aiKeySaved && tokenhubKeySaved) {
+      toast('两个 Key 都已保存');
     } else if (aiKeySaved) {
       toast('AI 模型 Key 已保存，下一条提问就会用真实模型回答');
+    } else if (tokenhubKeySaved) {
+      toast('TokenHub Key 已保存，宠物检索与以图搜宠已就绪');
     } else if (webhookSaved && !webhookValue) toast('网站设置已保存，企业微信提醒已关闭');
     else if (webhookSaved) toast('网站设置已保存，企业微信提醒已开启');
     else toast(cloudSaved ? '联系方式和二维码已同步到云端' : '联系方式和二维码已保存到本地');
