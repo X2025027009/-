@@ -25,6 +25,7 @@
  */
 const http = require('node:http');
 const crypto = require('node:crypto');
+const { createToolkit } = require('./tools');
 
 const PORT = Number(process.env.PORT) || 9000;
 const DEEPSEEK_HOST = 'https://api.deepseek.com';
@@ -156,32 +157,25 @@ function sqlResult(response) {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
-/** 读取可用于推荐的宠物公开档案。只取已发布，且不包含任何申请人信息。 */
-async function loadPetCatalog() {
-  const sql = `SELECT jsonb_build_object('pets', COALESCE(jsonb_agg(jsonb_build_object(
-      'id', id, 'name', name, 'type', pet_type, 'status', adoption_status,
-      'gender', gender, 'age', age_text, 'tags', tags,
-      'description', description, 'health', health,
-      'requirements', requirements, 'pauseReason', pause_reason
-    ) ORDER BY created_at), '[]'::jsonb)) AS result
-    FROM public.pets WHERE is_published = TRUE`;
-  const payload = sqlResult(await executePgSql(sql));
-  const pets = Array.isArray(payload?.pets) ? payload.pets : [];
-  // 只保留推荐时真正有用的字段，减少 token 消耗
-  return pets.map(pet => ({
-    id: text(pet.id, 80),
-    name: text(pet.name, 40),
-    type: text(pet.type, 10),
-    status: text(pet.status, 20),
-    gender: text(pet.gender, 10),
-    age: text(pet.age, 40),
-    tags: Array.isArray(pet.tags) ? pet.tags.slice(0, 8).map(tag => text(tag, 20)) : [],
-    description: text(pet.description, 500),
-    health: text(pet.health, 300),
-    requirements: text(pet.requirements, 300),
-    pauseReason: text(pet.pauseReason, 200)
-  }));
-}
+/** 工具层拿到的是"执行 SQL 并返回解析后 JSON"的能力，不关心底层通道。 */
+const toolkit = createToolkit({ query: async sql => sqlResult(await executePgSql(sql)) });
+
+/** Agent 最多进行几轮工具调用。超过就强制收口，避免无限循环烧额度。 */
+const MAX_TOOL_ROUNDS = 3;
+/** 单条工具结果写回上下文时的长度上限，防止把上下文撑爆。 */
+const MAX_TOOL_RESULT_CHARS = 8000;
+/**
+ * 正文缓冲阈值（字符）。
+ *
+ * 模型有时会在调用工具前先"自言自语"一句，而且常常是英文
+ * （实测出现过 "I'll look up the adoption policy for you."），
+ * 直接流出去会混进最终回答里。
+ *
+ * 处理办法：每轮正文先缓冲，超过这个长度才真正下发。
+ * 简短的"我来查一下"留在缓冲里，一旦这轮出现工具调用就整体丢弃；
+ * 而真正的回答很快就会超过阈值，流式效果不受影响。
+ */
+const PREAMBLE_GUARD_CHARS = 60;
 
 /** 访客侧限频：同一 IP 在 10 分钟内过多、或当天过多，直接拒绝。 */
 async function checkRateLimit(ip) {
@@ -206,8 +200,33 @@ async function checkRateLimit(ip) {
   return sqlResult(await executePgSql(sql));
 }
 
-/** 组装系统提示词。核心约束：只能用档案里的信息，不许编。 */
-function buildSystemPrompt(pets) {
+/**
+ * 工具模式下的系统提示词。
+ *
+ * 与档案注入模式最大的区别：**不再把宠物档案塞进来**，
+ * 而是告诉它有哪些工具、以及"先查再答"的纪律。
+ * 这样档案涨到几百只也不会撑爆上下文。
+ */
+function buildToolSystemPrompt() {
+  return `你是「成都猫狗小院」流浪动物领养平台的 AI 领养匹配助手。
+
+你可以调用工具查询小院的真实数据。**凡涉及具体宠物、领养政策、回访情况，必须先查再答**，不要凭印象作答；工具说没有，就如实说没有，绝不编造。
+
+你的任务：根据访客描述的自身情况（居住条件、作息、养宠经验、家人态度等），推荐 1-3 只最合适的宠物，并说明理由。
+
+必须遵守：
+1. 只推荐工具查到的、真实存在的宠物，用档案里的名字称呼；
+2. 每推荐一只都要说明**为什么适合**，理由要能对应到档案里的具体条目；
+3. **主动指出访客可能没考虑到的风险**：租房是否经房东同意、家人是否都同意、白天家中是否有人、封窗防护、经济与时间投入、现有宠物是否合得来；
+4. 如果访客条件与宠物都不太匹配，如实说明并给改善建议，不要硬推；
+5. 不替小院做任何承诺（不能说"一定能领养"），最终由小院与申请人沟通后决定；
+6. **调用工具时不要输出任何文字**（包括英文的"我来查一下"），直接发起调用；
+7. 语气亲切、简洁，用中文，不要 markdown 标题符号，不要输出 JSON；
+8. 控制在 300 字以内。`;
+}
+
+/** 档案注入模式的系统提示词（降级路径用）。核心约束：只能用档案里的信息，不许编。 */
+function buildCatalogPrompt(pets) {
   const catalog = pets
     .map(pet => {
       const lines = [
@@ -287,7 +306,7 @@ async function streamDeepSeek(res, pets, messages, apiKey) {
       stream: true,
       max_tokens: MAX_OUTPUT_TOKENS,
       temperature: 0.7,
-      messages: [{ role: 'system', content: buildSystemPrompt(pets) }, ...messages]
+      messages: [{ role: 'system', content: buildCatalogPrompt(pets) }, ...messages]
     })
   });
 
@@ -319,6 +338,180 @@ async function streamDeepSeek(res, pets, messages, apiKey) {
   }
   writeSse(res, { type: 'done', mock: false });
   res.end();
+}
+
+/**
+ * 把工具结果压缩成一行给页面看的人类可读说明。
+ * 目的：让访客知道 AI「正在查什么、查到了什么」，而不是干等。
+ */
+function summarizeToolResult(name, result) {
+  if (!result) return '';
+  if (result.ok === false) return `失败：${text(result.message, 60)}`;
+  switch (name) {
+    case 'search_pets':
+      return result.count ? `找到 ${result.count} 只` : '没有符合条件的';
+    case 'get_pet_profile':
+      return result.pet ? `读取「${text(result.pet.name, 20)}」的档案` : '未找到';
+    case 'get_adoption_policy':
+      return '读取领养政策';
+    case 'get_follow_up_history':
+      return result.hasHistory ? `${result.updates.length} 条回访记录` : `${text(result.petName, 20)}暂无回访记录`;
+    case 'check_requirement_gaps':
+      return result.missingCount ? `发现 ${result.missingCount} 项还没提到` : '常见要求都已提到';
+    default:
+      return '查询完成';
+  }
+}
+
+/**
+ * 发起一次流式补全，并把内容与工具调用一起收回来。
+ *
+ * 为什么用流式而不是"先非流式问一轮再流式答"：
+ * 后者每次都要多打一次模型，延迟翻倍；流式聚合 tool_calls 的分片虽然多写一点代码，
+ * 但正文能边生成边下发，访客不用干等。
+ */
+async function streamCompletion(res, convo, apiKey, { withTools }) {
+  const upstream = await fetch(`${DEEPSEEK_HOST}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      stream: true,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      temperature: 0.7,
+      messages: convo,
+      ...(withTools ? { tools: toolkit.definitions, tool_choice: 'auto' } : {})
+    })
+  });
+
+  if (!upstream.ok || !upstream.body) {
+    const detail = await upstream.text().catch(() => '');
+    const error = new Error(`AI 服务返回 ${upstream.status}${detail ? `：${text(detail, 160)}` : ''}`);
+    error.upstreamStatus = upstream.status;
+    error.upstreamDetail = detail;
+    throw error;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let streamed = false;
+  // 未下发的正文缓冲，用于挡掉"调工具前的自言自语"（见 PREAMBLE_GUARD_CHARS）
+  let pending = '';
+  let flushing = false;
+  // 工具调用在流里是分片下发的：先给 id 与函数名，参数再一点点拼。按 index 归并。
+  const toolCalls = [];
+
+  for await (const chunk of upstream.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        continue; // 上游偶发不完整行，跳过
+      }
+      const delta = parsed?.choices?.[0]?.delta;
+      if (!delta) continue;
+      if (delta.content) {
+        content += delta.content;
+        if (flushing) {
+          writeSse(res, { type: 'delta', text: delta.content });
+        } else {
+          pending += delta.content;
+          if (pending.length >= PREAMBLE_GUARD_CHARS) {
+            flushing = true;
+            streamed = true;
+            writeSse(res, { type: 'delta', text: pending });
+            pending = '';
+          }
+        }
+      }
+      if (Array.isArray(delta.tool_calls)) {
+        for (const part of delta.tool_calls) {
+          const index = Number(part.index) || 0;
+          if (!toolCalls[index]) toolCalls[index] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+          if (part.id) toolCalls[index].id = part.id;
+          if (part.function?.name) toolCalls[index].function.name += part.function.name;
+          if (part.function?.arguments) toolCalls[index].function.arguments += part.function.arguments;
+        }
+      }
+    }
+  }
+
+  const calls = toolCalls.filter(Boolean);
+  // 这一轮没有工具调用 → 缓冲里的就是正文，补发出去（短回答可能一直没超过阈值）
+  if (!calls.length && pending) {
+    streamed = true;
+    writeSse(res, { type: 'delta', text: pending });
+  }
+  // 有工具调用 → pending 是调工具前的自言自语，直接丢弃，不下发给访客
+
+  return { content, toolCalls: calls, streamed };
+}
+
+/**
+ * Agent 循环：模型自己决定查什么、查几次。
+ *
+ * 轮次上限 MAX_TOOL_ROUNDS，最后一轮**不再提供工具**，强制它基于已有信息收口作答，
+ * 避免"查了又查"把额度烧光。
+ */
+async function runAgent(res, messages, apiKey) {
+  const convo = [{ role: 'system', content: buildToolSystemPrompt() }, ...messages];
+  for (let round = 1; round <= MAX_TOOL_ROUNDS; round += 1) {
+    const withTools = round < MAX_TOOL_ROUNDS;
+    const { content, toolCalls } = await streamCompletion(res, convo, apiKey, { withTools });
+    if (!toolCalls.length) return; // 已直接作答并流式下发完毕
+
+    convo.push({ role: 'assistant', content: content || null, tool_calls: toolCalls });
+    for (const call of toolCalls) {
+      const name = text(call.function?.name, 40);
+      writeSse(res, { type: 'tool', name, status: 'running' });
+      const result = await toolkit.execute(name, call.function?.arguments);
+      writeSse(res, { type: 'tool', name, status: 'done', ok: result?.ok !== false, summary: summarizeToolResult(name, result) });
+      convo.push({
+        role: 'tool',
+        tool_call_id: text(call.id, 80) || `call_${round}`,
+        content: JSON.stringify(result).slice(0, MAX_TOOL_RESULT_CHARS)
+      });
+    }
+  }
+}
+
+/**
+ * 带降级的对话入口。
+ *
+ * 工具调用不被上游支持时（部分模型或代理不支持 tools 参数），
+ * 自动退回"把档案直接注入提示词"的老做法 —— 匹配助手不会因此整体失效。
+ * 只有在**还没有向访客下发任何内容**时才能安全重试；已经流出去的文字无法收回。
+ */
+async function runAgentWithFallback(res, messages, apiKey) {
+  let streamedAnything = false;
+  const originalWrite = res.write.bind(res);
+  res.write = (chunk, ...rest) => {
+    streamedAnything = true;
+    return originalWrite(chunk, ...rest);
+  };
+  try {
+    await runAgent(res, messages, apiKey);
+  } catch (error) {
+    const unsupportedTools = error.upstreamStatus === 400 && /tool/i.test(String(error.upstreamDetail || ''));
+    if (!streamedAnything && (unsupportedTools || error.upstreamStatus === 400)) {
+      console.error('工具调用不可用，退回档案注入模式：', error.message);
+      writeSse(res, { type: 'meta', note: 'degraded', reason: '工具调用不可用，已退回档案注入模式' });
+      const pets = await toolkit.loadPetCatalog();
+      writeSse(res, { type: 'meta', petCount: pets.length, degraded: true });
+      await streamDeepSeek(res, pets, messages, apiKey);
+      return;
+    }
+    throw error;
+  }
 }
 
 function readBody(req) {
@@ -398,16 +591,24 @@ async function handleChat(req, res) {
       return;
     }
 
-    const pets = await loadPetCatalog();
     const resolved = await resolveApiKey();
     const apiKey = resolved.key;
-    writeSse(res, { type: 'meta', mock: !apiKey, petCount: pets.length, keySource: resolved.source });
+    writeSse(res, { type: 'meta', mock: !apiKey, keySource: resolved.source, tools: toolkit.definitions.length });
 
     if (!apiKey) {
+      // 演示模式仍需要一份档案来生成示例回复
+      const pets = await toolkit.loadPetCatalog();
+      writeSse(res, { type: 'meta', petCount: pets.length });
       await streamMock(res, pets, messages);
       return;
     }
-    await streamDeepSeek(res, pets, messages, apiKey);
+    await runAgentWithFallback(res, messages, apiKey);
+    // 必须显式关闭：否则连接会一直挂着，直到云函数 60 秒超时才断开，
+    // 前端会一直转圈、测试也会超时。降级路径内部已自行 end()，故先判断。
+    if (!res.writableEnded) {
+      writeSse(res, { type: 'done', mock: false });
+      res.end();
+    }
   } catch (error) {
     console.error('AI 对话失败：', error.message);
     writeSse(res, { type: 'error', message: text(error.message, 200) || 'AI 服务暂时不可用。' });
@@ -450,6 +651,8 @@ const server = http.createServer(async (req, res) => {
         hasEnvId: Boolean(process.env.TCB_ENV || process.env.SCF_NAMESPACE)
       },
       endpoints: { 'POST /chat': 'SSE 流式对话，body: {messages:[{role,content}]}' },
+      // 工具清单只报数量与名字：调用方据此判断 Function Calling 是否已启用
+      tools: { count: toolkit.definitions.length, names: toolkit.definitions.map(item => item.function.name) },
       time: new Date().toISOString()
     })
   );

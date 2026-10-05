@@ -89,7 +89,11 @@ async function readSse(url, body) {
   const done = chat.events.find(e => e.type === 'done');
   check('首个事件是 meta', chat.events[0]?.type === 'meta', JSON.stringify(chat.events[0]));
   check('meta 带 mock 标记', typeof meta?.mock === 'boolean', JSON.stringify(meta));
-  check('meta 报告了宠物数量', Number(meta?.petCount) > 0, JSON.stringify(meta));
+  // 接口契约变更说明：改造前 meta 里带 petCount（把全部档案塞进提示词的旧做法）。
+  // 现在改为工具调用模式，首屏不再预载档案，因此改报「已加载多少个工具」；
+  // 宠物数量由工具按需查询（见 tools/test-ai-tools.cjs）。
+  // petCount 前端从未使用过，去掉不影响任何界面。
+  check('meta 报告了已加载的工具数量', Number(meta?.tools) >= 5, JSON.stringify(meta));
   check('收到多个 delta 增量块（不是一整段）', deltas.length >= 5, `实际 ${deltas.length} 块`);
   check('以 done 事件正常结束', Boolean(done), JSON.stringify(chat.events.slice(-2)));
   check('没有 error 事件', !chat.events.some(e => e.type === 'error'), JSON.stringify(chat.events.find(e => e.type === 'error')));

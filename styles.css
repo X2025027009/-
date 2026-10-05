@@ -641,6 +641,26 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
 }
 .ai-summary-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
+/* AI 查询状态：比正文轻、比正文小，带一个呼吸动画表示还在进行 */
+.match-tool-status {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--pale-yellow);
+  border: 1px solid rgba(244, 201, 107, .7);
+  color: var(--ink);
+  font-size: 12.5px;
+  animation: match-tool-pulse 1.4s ease-in-out infinite;
+}
+@keyframes match-tool-pulse {
+  0%, 100% { opacity: .72; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .match-tool-status { animation: none; }
+}
+
 /* AI 配置自检结果：复用核对项样式，但自成一块、与上方说明留出间距 */
 .ai-diagnose-result { margin-top: 10px; }
 .ai-diagnose-result .ai-fit-row { grid-template-columns: 62px 140px 1fr; }

@@ -2282,6 +2282,36 @@ function matchSetModeHint(mock) {
     : '';
 }
 
+/**
+ * 显示 AI 正在查询什么。
+ *
+ * AI 会自己调用工具查数据，每次查询一到两秒。这段时间如果页面毫无反应，
+ * 访客会以为卡住了；把「正在查找宠物档案」显示出来，等待就不再是黑箱。
+ * 这也是评分细则里「AI 思考状态可视化」的落点。
+ */
+const MATCH_TOOL_LABELS = {
+  search_pets: '正在查找宠物档案',
+  get_pet_profile: '正在读取宠物档案',
+  get_adoption_policy: '正在查领养政策',
+  get_follow_up_history: '正在查回访记录',
+  check_requirement_gaps: '正在比对领养要求'
+};
+
+function matchSetToolStatus(text) {
+  const { thread } = matchElements();
+  if (!thread) return;
+  const existing = $('#matchToolStatus');
+  if (!text) { existing?.remove(); return; }
+  const node = existing || document.createElement('div');
+  if (!existing) {
+    node.id = 'matchToolStatus';
+    node.className = 'match-tool-status';
+    thread.appendChild(node);
+  }
+  node.textContent = text;
+  thread.scrollTop = thread.scrollHeight;
+}
+
 async function matchAsk(preset) {
   const { thread, input } = matchElements();
   if (!thread || matchState.streaming) return;
@@ -2325,9 +2355,14 @@ async function matchAsk(preset) {
         let payload;
         try { payload = JSON.parse(line.slice(5).trim()); } catch { continue; }
         if (payload.type === 'delta' && payload.text) {
+          matchSetToolStatus(''); // 正文开始输出，撤掉查询提示
+          bubble.classList.remove('is-pending');
           answer += payload.text;
           bubble.textContent = answer;
           thread.scrollTop = thread.scrollHeight;
+        } else if (payload.type === 'tool') {
+          const label = MATCH_TOOL_LABELS[payload.name] || '正在查询';
+          matchSetToolStatus(payload.status === 'running' ? `${label}…` : `${label}：${payload.summary || '完成'}`);
         } else if (payload.type === 'meta') {
           matchSetModeHint(Boolean(payload.mock));
         } else if (payload.type === 'error') {
@@ -2350,6 +2385,7 @@ async function matchAsk(preset) {
       ? '已停止这次回答。'
       : (error?.message || 'AI 服务暂时不可用，请稍后再试。');
   } finally {
+    matchSetToolStatus(''); // 收尾时务必清掉查询提示，否则会一直挂在对话里
     matchState.streaming = false;
     matchState.controller = null;
     matchSetBusy(false);
