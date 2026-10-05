@@ -641,6 +641,26 @@ h2 { font-size: clamp(30px, 3.4vw, 48px); }
 }
 .ai-summary-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
+/* 回答下方的「依据」：小、克制，不抢正文，但一眼能找到 */
+.match-sources {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 0;
+}
+.match-sources-label { color: var(--muted); font-size: 12px; }
+.match-source-item {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--cream);
+  border: 1px solid var(--soft-line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* AI 查询状态：比正文轻、比正文小，带一个呼吸动画表示还在进行 */
 .match-tool-status {
   align-self: flex-start;

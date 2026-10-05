@@ -126,6 +126,24 @@ function toolSummary(events) {
   check('回答里提到了具体宠物名或"没有匹配"', /喜豆|小黄|旺仔|皮蛋|花卷|coco|没有|不太匹配/i.test(multi.text), '回答过于笼统');
   check('没有 error 事件', !multi.events.some(e => e.type === 'error'));
 
+  // ── 用例四：语义检索（关键词匹配不到才算数）─────────────────
+  console.log('\n【4】描述性提问（没有任何关键词能直接匹配）');
+  // 「不太需要运动」与 coco 档案里的「安静不爱动」字面完全不同，
+  // 只有语义检索能把它们连起来。若这里返回空，说明 RAG 没生效。
+  const semantic = await ask('有没有不太需要运动的猫？我平时比较忙。');
+  bailIfRateLimited(semantic, '描述性提问');
+  const semanticTools = toolSummary(semantic.events);
+  const sources = semantic.events.filter(e => e.type === 'sources').flatMap(e => e.items || []);
+  console.log('     实际调用的工具:', semanticTools.names.join(', ') || '（无）');
+  console.log('     工具结果摘要:', semanticTools.summaries.join(' | ') || '（无）');
+  console.log('     检索到的依据:', [...new Set(sources)].join(' / ') || '（无）');
+  console.log('     回答前 70 字:', semantic.text.slice(0, 70).replace(/\n/g, ' '));
+  check('调用了语义检索工具', semanticTools.names.includes('search_knowledge'), `实际：${semanticTools.names.join(',')}`);
+  check('检索返回了依据来源', sources.length > 0, '没有 sources 事件，前端就显示不出依据');
+  check('依据里包含具体来源标签', sources.some(s => /档案|要求|政策|回访/.test(s)), [...new Set(sources)].join(','));
+  check('回答非空', semantic.text.trim().length > 20);
+  check('没有 error 事件', !semantic.events.some(e => e.type === 'error'), JSON.stringify(semantic.events.find(e => e.type === 'error')));
+
   console.log(`\n===== 通过 ${passed} 项，失败 ${failed} 项 =====`);
   process.exit(failed ? 1 : 0);
 })();

@@ -26,6 +26,7 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { createToolkit } = require('./tools');
+const { createKnowledge } = require('./knowledge');
 
 const PORT = Number(process.env.PORT) || 9000;
 const DEEPSEEK_HOST = 'https://api.deepseek.com';
@@ -157,8 +158,10 @@ function sqlResult(response) {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
-/** 工具层拿到的是"执行 SQL 并返回解析后 JSON"的能力，不关心底层通道。 */
-const toolkit = createToolkit({ query: async sql => sqlResult(await executePgSql(sql)) });
+/** 工具层与知识层拿到的是"执行 SQL 并返回解析后 JSON"的能力，不关心底层通道。 */
+const runSql = async sql => sqlResult(await executePgSql(sql));
+const knowledge = createKnowledge({ query: runSql, embed: texts => embedTexts(texts) });
+const toolkit = createToolkit({ query: runSql, knowledge });
 
 /** Agent 最多进行几轮工具调用。超过就强制收口，避免无限循环烧额度。 */
 const MAX_TOOL_ROUNDS = 3;
@@ -168,14 +171,14 @@ const MAX_TOOL_RESULT_CHARS = 8000;
  * 正文缓冲阈值（字符）。
  *
  * 模型有时会在调用工具前先"自言自语"一句，而且常常是英文
- * （实测出现过 "I'll look up the adoption policy for you."），
- * 直接流出去会混进最终回答里。
+ * （实测出现过 "I'll look into suitable cats and the adoption requirements"
+ * 这类 60 多字的句子），直接流出去会混进最终回答里。
  *
- * 处理办法：每轮正文先缓冲，超过这个长度才真正下发。
- * 简短的"我来查一下"留在缓冲里，一旦这轮出现工具调用就整体丢弃；
- * 而真正的回答很快就会超过阈值，流式效果不受影响。
+ * 处理办法：**带工具的轮次里**正文先缓冲，只有超过这个长度才认为
+ * "这是正文而不是开场白"，开始下发；较短的句子一旦这一轮出现工具调用就整体丢弃。
+ * 阈值取 200 是因为实测的开场白都在 100 字以内，而真正的回答远超这个长度。
  */
-const PREAMBLE_GUARD_CHARS = 60;
+const PREAMBLE_MAX_CHARS = 200;
 
 /** 访客侧限频：同一 IP 在 10 分钟内过多、或当天过多，直接拒绝。 */
 async function checkRateLimit(ip) {
@@ -348,6 +351,8 @@ function summarizeToolResult(name, result) {
   if (!result) return '';
   if (result.ok === false) return `失败：${text(result.message, 60)}`;
   switch (name) {
+    case 'search_knowledge':
+      return result.count ? `找到 ${result.count} 段相关资料` : '没有相关资料';
     case 'search_pets':
       return result.count ? `找到 ${result.count} 只` : '没有符合条件的';
     case 'get_pet_profile':
@@ -396,9 +401,8 @@ async function streamCompletion(res, convo, apiKey, { withTools }) {
   let buffer = '';
   let content = '';
   let streamed = false;
-  // 未下发的正文缓冲，用于挡掉"调工具前的自言自语"（见 PREAMBLE_GUARD_CHARS）
+  // 未下发的正文缓冲，用于挡掉"调工具前的自言自语"（见 PREAMBLE_MAX_CHARS）
   let pending = '';
-  let flushing = false;
   // 工具调用在流里是分片下发的：先给 id 与函数名，参数再一点点拼。按 index 归并。
   const toolCalls = [];
 
@@ -421,12 +425,15 @@ async function streamCompletion(res, convo, apiKey, { withTools }) {
       if (!delta) continue;
       if (delta.content) {
         content += delta.content;
-        if (flushing) {
+        if (!withTools || streamed) {
+          // 不带工具的轮次（最终回答）直接流；
+          // 带工具的轮次一旦开始下发，后续也继续流。
+          streamed = true;
           writeSse(res, { type: 'delta', text: delta.content });
         } else {
           pending += delta.content;
-          if (pending.length >= PREAMBLE_GUARD_CHARS) {
-            flushing = true;
+          if (pending.length >= PREAMBLE_MAX_CHARS) {
+            // 超过阈值，说明这是正文而非开场白，开始下发
             streamed = true;
             writeSse(res, { type: 'delta', text: pending });
             pending = '';
@@ -475,6 +482,11 @@ async function runAgent(res, messages, apiKey) {
       writeSse(res, { type: 'tool', name, status: 'running' });
       const result = await toolkit.execute(name, call.function?.arguments);
       writeSse(res, { type: 'tool', name, status: 'done', ok: result?.ok !== false, summary: summarizeToolResult(name, result) });
+      // 检索到依据时单独发一条「来源」，前端在回答下方列出。
+      // 不依赖模型自己引用——它可能忘了说，而"依据可查"是可解释性的硬要求。
+      if (Array.isArray(result?.sources) && result.sources.length) {
+        writeSse(res, { type: 'sources', items: result.sources.slice(0, 6) });
+      }
       convo.push({
         role: 'tool',
         tool_call_id: text(call.id, 80) || `call_${round}`,
@@ -571,6 +583,105 @@ async function resolveApiKey() {
   }
 }
 
+/**
+ * 解析 TokenHub Key（向量化与图像理解用）。
+ *
+ * 与 DeepSeek Key 存在同一个 ai_config 里，但用途完全独立：
+ * DeepSeek 负责"说话"，TokenHub 负责"把文字和照片变成向量"。
+ * 同样只在服务端读取，绝不下发前端。
+ */
+let cachedTokenhubKey = null;
+let cachedTokenhubKeyAt = 0;
+
+async function resolveTokenhubKey() {
+  const fromEnv = text(process.env.TOKENHUB_API_KEY, 200);
+  if (fromEnv) return fromEnv;
+  if (cachedTokenhubKey !== null && Date.now() - cachedTokenhubKeyAt < API_KEY_CACHE_MS) return cachedTokenhubKey;
+  try {
+    const response = await executePgSql(
+      "SELECT jsonb_build_object('key', COALESCE((SELECT value->>'tokenhubApiKey' FROM public.yard_settings WHERE key='ai_config' LIMIT 1), '')) AS result"
+    );
+    cachedTokenhubKey = text(sqlResult(response)?.key, 200);
+  } catch (error) {
+    console.error('读取 TokenHub 配置失败：', error.message);
+    cachedTokenhubKey = '';
+  }
+  cachedTokenhubKeyAt = Date.now();
+  return cachedTokenhubKey;
+}
+
+/** TokenHub 向量接口（官方文档核实）：OpenAI 兼容，维度由模型固定。 */
+const TOKENHUB_EMBEDDING_URL = 'https://tokenhub.tencentmaas.com/v1/embeddings';
+const TOKENHUB_EMBEDDING_MODEL = process.env.TOKENHUB_EMBEDDING_MODEL || 'kinfra-text-embedding-0.6b';
+
+/**
+ * 批量把文本转成向量。
+ * 失败直接抛错，由知识层转成 `{ok:false}` 交给模型——向量服务故障不该让整轮对话崩掉。
+ */
+async function embedTexts(texts) {
+  if (!Array.isArray(texts) || !texts.length) return [];
+  const apiKey = await resolveTokenhubKey();
+  if (!apiKey) throw new Error('尚未配置 TokenHub Key，无法做语义检索。');
+  const response = await fetch(TOKENHUB_EMBEDDING_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: TOKENHUB_EMBEDDING_MODEL, input: texts, encoding_format: 'float' })
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`向量化服务返回 ${response.status}${detail ? `：${text(detail, 120)}` : ''}`);
+  }
+  const data = await response.json();
+  const vectors = (data?.data || []).map(item => item.embedding);
+  if (vectors.length !== texts.length) {
+    throw new Error(`向量化返回数量不符（期望 ${texts.length}，实际 ${vectors.length}）。`);
+  }
+  return vectors;
+}
+
+/**
+ * 逐个工具跑一遍冒烟测试。
+ *
+ * 为什么需要：工具里的 SQL 是手写的，写错列名（本项目真发生过——
+ * 把 pet_updates 的 body 写成了 content）只会在真正调用到那个工具时才暴露，
+ * 而且报错会以"AI 答不出来"的形式出现，很难定位。
+ * 这里一次性把每个工具都跑一遍，谁坏了立刻看得见。
+ *
+ * 只返回成功与否和错误信息，不含任何密钥或申请人数据；
+ * 默认不跑 search_knowledge（它会触发索引重建、消耗额度），需要时加 ?deep=1。
+ */
+async function runToolSmokeTests({ deep = false } = {}) {
+  const report = {};
+  async function run(name, args) {
+    const started = Date.now();
+    try {
+      const result = await toolkit.execute(name, JSON.stringify(args));
+      const ok = result?.ok !== false;
+      report[name] = { ok, ms: Date.now() - started, ...(ok ? {} : { message: text(result?.message, 160) }) };
+      return result;
+    } catch (error) {
+      report[name] = { ok: false, ms: Date.now() - started, message: text(error.message, 160) };
+      return null;
+    }
+  }
+
+  const pets = await run('search_pets', {});
+  await run('get_adoption_policy', {});
+  await run('check_requirement_gaps', { conditions: '我租房，房东同意，家里人也都支持' });
+  // 档案类工具需要一个真实存在的名字，从检索结果里取一个
+  const sample = pets?.pets?.[0]?.name;
+  if (sample) {
+    await run('get_pet_profile', { name: sample });
+    await run('get_follow_up_history', { name: sample });
+  } else {
+    report.get_pet_profile = { ok: false, message: '没有已发布宠物，无法取样本测试' };
+    report.get_follow_up_history = { ok: false, message: '没有已发布宠物，无法取样本测试' };
+  }
+  if (deep) await run('search_knowledge', { query: sample ? `${sample}的性格` : '领养要求' });
+
+  return report;
+}
+
 async function handleChat(req, res) {
   const base = { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' };
   res.writeHead(200, base);
@@ -628,6 +739,16 @@ const server = http.createServer(async (req, res) => {
 
   if (url.includes('/chat') && req.method === 'POST') {
     await handleChat(req, res);
+    return;
+  }
+
+  // 工具自检：逐个跑一遍，写错列名这类问题立刻现形
+  if (url.includes('/health/tools')) {
+    const deep = url.includes('deep=1');
+    const tools = await runToolSmokeTests({ deep });
+    const failures = Object.entries(tools).filter(([, item]) => !item.ok).map(([name]) => name);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: failures.length === 0, failures, tools, deep, time: new Date().toISOString() }));
     return;
   }
 

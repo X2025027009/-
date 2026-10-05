@@ -2290,6 +2290,7 @@ function matchSetModeHint(mock) {
  * 这也是评分细则里「AI 思考状态可视化」的落点。
  */
 const MATCH_TOOL_LABELS = {
+  search_knowledge: '正在按语义检索小院资料',
   search_pets: '正在查找宠物档案',
   get_pet_profile: '正在读取宠物档案',
   get_adoption_policy: '正在查领养政策',
@@ -2312,6 +2313,25 @@ function matchSetToolStatus(text) {
   thread.scrollTop = thread.scrollHeight;
 }
 
+/**
+ * 在回答下方列出 AI 检索到的资料出处。
+ *
+ * 用途有两层：访客能自己核对 AI 说的对不对；管理员也能看出
+ * "回答不准"是因为资料缺失还是检索没命中。
+ */
+function matchAppendSources(items) {
+  const { thread } = matchElements();
+  const labels = (items || []).map(item => String(item || '').trim()).filter(Boolean).slice(0, 6);
+  if (!thread || !labels.length) return;
+  const node = document.createElement('div');
+  node.className = 'match-sources';
+  node.innerHTML = `<span class="match-sources-label">依据</span>${labels
+    .map(label => `<span class="match-source-item">${escapeHtml(label)}</span>`)
+    .join('')}`;
+  thread.appendChild(node);
+  thread.scrollTop = thread.scrollHeight;
+}
+
 async function matchAsk(preset) {
   const { thread, input } = matchElements();
   if (!thread || matchState.streaming) return;
@@ -2329,6 +2349,7 @@ async function matchAsk(preset) {
   bubble.classList.add('is-pending');
   let answer = '';
   let failure = '';
+  const sources = [];
 
   matchState.controller = new AbortController();
   try {
@@ -2363,6 +2384,11 @@ async function matchAsk(preset) {
         } else if (payload.type === 'tool') {
           const label = MATCH_TOOL_LABELS[payload.name] || '正在查询';
           matchSetToolStatus(payload.status === 'running' ? `${label}…` : `${label}：${payload.summary || '完成'}`);
+        } else if (payload.type === 'sources') {
+          for (const item of payload.items || []) {
+            const label = String(item || '').trim();
+            if (label && !sources.includes(label)) sources.push(label);
+          }
         } else if (payload.type === 'meta') {
           matchSetModeHint(Boolean(payload.mock));
         } else if (payload.type === 'error') {
@@ -2374,6 +2400,9 @@ async function matchAsk(preset) {
     bubble.classList.remove('is-pending');
     if (answer) {
       matchState.messages.push({ role: 'assistant', content: answer });
+      // 依据放在回答下方：AI 检索到了哪些资料，访客可以自己核对。
+      // 不依赖模型在正文里引用——它可能忘了说，而"依据可查"不能靠它自觉。
+      matchAppendSources(sources);
     } else {
       bubble.classList.add('is-error');
       bubble.textContent = failure || 'AI 这次没有给出回复，请再试一次。';

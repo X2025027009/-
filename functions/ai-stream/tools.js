@@ -25,8 +25,30 @@ const TOOL_TIMEOUT_MS = 6000;
 /** 返回给模型的记录条数上限，避免工具结果本身把上下文撑爆。 */
 const MAX_RESULT_ROWS = 20;
 
-/** 工具定义：交给模型的"能力清单"（OpenAI Function Calling 格式）。 */
+/**
+ * 工具定义：交给模型的"能力清单"（OpenAI Function Calling 格式）。
+ *
+ * search_knowledge 与 search_pets 的分工：
+ *   描述性、说不清条件的需求（"安静的""适合上班族的"）走语义检索；
+ *   条件明确的（"有没有公猫"）走结构化查询，更快也更准。
+ *   两者都提供，让模型自己选——这本来就是它该判断的事。
+ */
 const TOOL_DEFINITIONS = [
+  {
+    type: 'function',
+    function: {
+      name: 'search_knowledge',
+      description:
+        '按意思检索小院的全部文字资料：宠物性格与健康状况、领养要求、领养政策、历史回访记录。当访客用描述性说法提问时优先用它，例如「想找一只安静的猫」「有没有适合上班族的」「它以前被人养过吗」「你们怎么回访」。返回最相关的片段及来源标签。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '检索用的自然语言，尽量保留访客的原话和关键条件' }
+        },
+        required: ['query']
+      }
+    }
+  },
   {
     type: 'function',
     function: {
@@ -132,7 +154,7 @@ function makeHelpers() {
  *        由调用方注入，工具层不关心底层是 OpenAPI 还是别的通道，
  *        便于单测时替换成假实现。
  */
-function createToolkit({ query }) {
+function createToolkit({ query, knowledge }) {
   const { clip, quote } = makeHelpers();
 
   /** 统一的工具超时包装：超时不抛错，而是回一句可读的降级说明。 */
@@ -245,10 +267,11 @@ function createToolkit({ query }) {
     const found = await findPet(args);
     if (!found.ok) return found;
     const petId = clip(found.pets[0].id, 80);
+    // 注意：pet_updates 的正文列名是 body，不是 content（核对 information_schema 后确认）
     const sql = `SELECT jsonb_build_object('updates', COALESCE(jsonb_agg(jsonb_build_object(
-        'date', update_date, 'title', title, 'content', content
+        'date', update_date, 'title', title, 'content', body
       ) ORDER BY update_date DESC), '[]'::jsonb)) AS result
-      FROM (SELECT update_date, title, content FROM public.pet_updates WHERE pet_id = ${quote(petId)} ORDER BY update_date DESC LIMIT 10) t`;
+      FROM (SELECT update_date, title, body FROM public.pet_updates WHERE pet_id = ${quote(petId)} ORDER BY update_date DESC LIMIT 10) t`;
     const payload = await query(sql);
     const updates = Array.isArray(payload?.updates) ? payload.updates : [];
     return {
@@ -285,7 +308,19 @@ function createToolkit({ query }) {
     };
   }
 
+  /**
+   * 语义检索。检索不可用时返回 ok:false，模型可以改用 search_pets 之类的
+   * 结构化查询继续——工具层任何一环故障都不该让对话中断。
+   */
+  async function searchKnowledge(args = {}) {
+    if (!knowledge) return { ok: false, message: '语义检索暂不可用，请改用 search_pets 按条件查询。' };
+    const question = clip(args.query, 200);
+    if (!question) return { ok: false, message: '需要提供检索内容。' };
+    return knowledge.search(question);
+  }
+
   const EXECUTORS = {
+    search_knowledge: searchKnowledge,
     search_pets: searchPets,
     get_pet_profile: getPetProfile,
     get_adoption_policy: getAdoptionPolicy,
