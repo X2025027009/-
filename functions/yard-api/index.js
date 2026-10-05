@@ -735,6 +735,213 @@ function ruleBasedFit(application, pet) {
  * 定位：**只做信息整理与提示，不做录取决定**，决定权始终在管理员。
  * 只把「这条申请 + 这只宠物的领养要求」发给模型，不含其它申请人数据。
  */
+/**
+ * 管理员侧审核工具集。
+ *
+ * ── 为什么需要 ────────────────────────────────────────────────
+ * 改造前是一次性摘要：把申请和宠物要求拼进提示词，让模型直接输出结论。
+ * 问题在于模型"看到什么就只能答什么"——它没法去查
+ * 「这个人有没有在别处也投过」「这只宠物以前被谁养过、后来怎么样」。
+ *
+ * ── 隐私边界（重要）───────────────────────────────────────────
+ * 这些工具会碰到其他申请人的数据。**只把「当前这位申请人」的
+ * 姓名与联系方式作为查询条件，不把其他人的姓名和联系方式写进模型上下文**——
+ * 查同一人是否重复投递时，返回的是宠物名、时间、状态，不含联系方式。
+ * 管理员本来就知道自己在审谁，多喂一份他人隐私没有必要。
+ */
+const REVIEW_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'get_pet_profile',
+      description: '读取意向宠物的完整档案：年龄、健康情况、性格描述、领养要求、当前领养状态。核对待领养要求时使用。',
+      parameters: { type: 'object', properties: { petId: { type: 'string', description: '宠物编号' } }, required: ['petId'] }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_related_applications',
+      description:
+        '查同一位申请人（按联系方式匹配）在小院投递过的其它申请，用于识别「广撒网」或此前已申请过的情况。返回宠物名、提交时间与处理状态，**不含任何联系方式**。',
+      parameters: {
+        type: 'object',
+        properties: { contactNormalized: { type: 'string', description: '当前申请人的联系方式（已归一化）' } },
+        required: ['contactNormalized']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_pet_follow_ups',
+      description: '读取意向宠物的历史回访与近况记录。判断这只宠物此前是否被领养过、结果如何时使用。',
+      parameters: { type: 'object', properties: { petId: { type: 'string', description: '宠物编号' } }, required: ['petId'] }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_pet_application_stats',
+      description: '查这只宠物收到的申请总数与各状态分布。用于判断竞争程度、以及管理员是否已处理过其它申请。',
+      parameters: { type: 'object', properties: { petId: { type: 'string', description: '宠物编号' } }, required: ['petId'] }
+    }
+  }
+];
+
+/** Agent 最多进行几轮工具调用。最后一轮不再给工具，强制收口。 */
+const MAX_REVIEW_ROUNDS = 3;
+const MAX_REVIEW_TOOL_CHARS = 6000;
+
+/** 执行一个审核工具。永不抛错：异常转成可读结果交给模型继续。 */
+async function runReviewTool(name, rawArguments, secret) {
+  // 不设初值：参数解析失败会直接 return，初值永远读不到
+  let args;
+  try {
+    args = typeof rawArguments === 'string' ? JSON.parse(rawArguments || '{}') : rawArguments || {};
+  } catch {
+    return { ok: false, message: '工具参数不是合法 JSON。' };
+  }
+  const petId = text(args.petId, 80);
+  try {
+    if (name === 'get_pet_profile') {
+      if (!petId) return { ok: false, message: '缺少宠物编号。' };
+      const payload = sqlResult(await executePgSql(`SELECT COALESCE((
+          SELECT jsonb_build_object('name', name, 'type', pet_type, 'status', adoption_status,
+            'gender', gender, 'age', age_text, 'tags', tags,
+            'description', description, 'health', health, 'requirements', requirements,
+            'pauseReason', pause_reason)
+          FROM public.pets WHERE id = ${sqlLiteral(petId)} LIMIT 1
+        ), 'null'::jsonb) AS result`, secret));
+      return payload && payload.name ? { ok: true, pet: payload } : { ok: false, message: '没有找到这只宠物。' };
+    }
+
+    if (name === 'find_related_applications') {
+      const contact = text(args.contactNormalized, 120);
+      if (!contact) return { ok: false, message: '缺少联系方式。' };
+      // 刻意只取宠物名、时间、状态，不取联系方式与他人姓名
+      const payload = sqlResult(await executePgSql(`SELECT jsonb_build_object(
+          'total', count(*),
+          'items', COALESCE(jsonb_agg(jsonb_build_object(
+            'petName', COALESCE(p.name, ''), 'submittedAt', a.submitted_at::text,
+            'status', a.internal_status, 'applicationType', a.application_type
+          ) ORDER BY a.submitted_at DESC), '[]'::jsonb)
+        ) AS result
+        FROM public.applications a LEFT JOIN public.pets p ON p.id = a.pet_id
+        WHERE a.contact_normalized = ${sqlLiteral(contact)}`, secret));
+      return { ok: true, total: Number(payload?.total) || 0, items: payload?.items || [] };
+    }
+
+    if (name === 'get_pet_follow_ups') {
+      if (!petId) return { ok: false, message: '缺少宠物编号。' };
+      const payload = sqlResult(await executePgSql(`SELECT jsonb_build_object('updates', COALESCE(jsonb_agg(jsonb_build_object(
+            'date', update_date::text, 'title', title, 'body', body
+          ) ORDER BY update_date DESC), '[]'::jsonb)) AS result
+          FROM (SELECT update_date, title, body FROM public.pet_updates WHERE pet_id = ${sqlLiteral(petId)} ORDER BY update_date DESC LIMIT 10) t`, secret));
+      return { ok: true, total: (payload?.updates || []).length, updates: payload?.updates || [] };
+    }
+
+    if (name === 'get_pet_application_stats') {
+      if (!petId) return { ok: false, message: '缺少宠物编号。' };
+      const payload = sqlResult(await executePgSql(`SELECT jsonb_build_object(
+          'total', count(*),
+          'byStatus', COALESCE(jsonb_object_agg(internal_status, n), '{}'::jsonb)
+        ) AS result FROM (
+          SELECT internal_status, count(*) AS n FROM public.applications
+          WHERE pet_id = ${sqlLiteral(petId)} GROUP BY internal_status
+        ) s CROSS JOIN LATERAL (SELECT 1) _`, secret));
+      // jsonb_object_agg 在零行时会是 NULL，这里补一下总数
+      const total = Number(payload?.total) || 0;
+      return { ok: true, total, byStatus: payload?.byStatus || {} };
+    }
+
+    return { ok: false, message: `没有名为 ${name} 的工具。` };
+  } catch (error) {
+    return { ok: false, message: `工具执行失败：${text(error.message, 150)}` };
+  }
+}
+
+/** 工具名 → 给管理员看的一行说明，让他知道 AI 都查了什么。 */
+const REVIEW_TOOL_LABELS = {
+  get_pet_profile: '读取意向宠物档案',
+  find_related_applications: '查该申请人是否重复投递',
+  get_pet_follow_ups: '查该宠物的回访记录',
+  get_pet_application_stats: '统计该宠物的申请情况'
+};
+
+/**
+ * 非流式调用模型（管理员侧不需要流式：结果是一次性 JSON，不是逐字阅读）。
+ * 返回正文与工具调用。
+ */
+async function callReviewModel(convo, tools, apiKey) {
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+      stream: false,
+      temperature: 0.2,
+      max_tokens: 1200,
+      messages: convo,
+      ...(tools ? { tools, tool_choice: 'auto' } : {})
+    })
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`模型返回 ${response.status}${detail ? `：${text(detail, 120)}` : ''}`);
+  }
+  const data = await response.json();
+  const message = data?.choices?.[0]?.message || {};
+  return { content: text(message.content, 4000), toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [] };
+}
+
+/**
+ * 审核 Agent：模型自己决定查什么、查几次，最后输出结构化结论。
+ * 返回 { content, steps }，steps 用于在页面上展示"AI 查了哪些东西"。
+ */
+async function runReviewAgent(detail, apiKey, secret) {
+  const systemPrompt = `你是流浪动物救助站的管理员助手。管理员要逐条核对领养申请与宠物的领养要求。
+你可以调用工具查询小院的真实数据。**凡涉及该申请人的历史投递、该宠物的回访记录或申请竞争情况，先查再答**，不要凭印象。
+只依据查到的信息整理，**不要编造申请人没有提供的内容**；信息缺失就明确写「未提及」。
+最后只输出 JSON 对象，不要任何额外文字，格式：
+{"headline":"一句话概括这位申请人（40字内）","fit":[{"label":"核对项","status":"满足|缺失|未提及|需确认","note":"依据"}],"questions":["电话沟通建议问的问题，1-3条"],"caution":"最需要注意的一个风险点，一句话"}`;
+
+  const convo = [
+    { role: 'system', content: systemPrompt },
+    {
+      role: 'user',
+      content: `【待审核的申请】${JSON.stringify(detail.applicant)}\n【意向宠物】${JSON.stringify(detail.pet)}\n（宠物编号：${text(detail.petId, 80) || '未知'}）`
+    }
+  ];
+  const steps = [];
+
+  for (let round = 1; round <= MAX_REVIEW_ROUNDS; round += 1) {
+    const withTools = round < MAX_REVIEW_ROUNDS;
+    const reply = await callReviewModel(convo, withTools ? REVIEW_TOOLS : null, apiKey);
+    if (!reply.toolCalls.length) return { content: reply.content, steps };
+
+    convo.push({ role: 'assistant', content: reply.content || null, tool_calls: reply.toolCalls });
+    for (const call of reply.toolCalls) {
+      const name = text(call.function?.name, 40);
+      const result = await runReviewTool(name, call.function?.arguments, secret);
+      steps.push({
+        tool: name,
+        label: REVIEW_TOOL_LABELS[name] || name,
+        ok: result?.ok !== false,
+        summary: result?.ok === false ? text(result.message, 80) : ''
+      });
+      convo.push({
+        role: 'tool',
+        tool_call_id: text(call.id, 80) || `call_${round}`,
+        content: JSON.stringify(result).slice(0, MAX_REVIEW_TOOL_CHARS)
+      });
+    }
+  }
+  // 轮次用尽仍未收口：再要一次结论，这次不给工具
+  const finalReply = await callReviewModel(convo, null, apiKey);
+  return { content: finalReply.content, steps };
+}
+
 async function summarizeApplication(event, context) {
   await requireAdmin(context);
   const applicationId = text(event.applicationId, 120);
@@ -750,7 +957,9 @@ async function summarizeApplication(event, context) {
            'family', a.family_agreement, 'otherPets', a.other_pets, 'note', a.note),
          'pet', jsonb_build_object(
            'name', p.name, 'type', p.pet_type, 'status', p.adoption_status,
-           'age', p.age_text, 'health', p.health, 'requirements', p.requirements)
+           'age', p.age_text, 'health', p.health, 'requirements', p.requirements),
+         'petId', a.pet_id,
+         'contactNormalized', a.contact_normalized
        )
        FROM public.applications a
        LEFT JOIN public.pets p ON p.id = a.pet_id
@@ -779,45 +988,22 @@ async function summarizeApplication(event, context) {
     };
   }
 
-  const systemPrompt = `你是流浪动物救助站的管理员助手。管理员需要逐条核对领养申请与宠物的领养要求。
-只依据给定信息整理，**不要编造申请人没有提供的内容**；信息缺失就明确写「未提及」。
-只输出 JSON 对象，不要任何额外文字，格式：
-{"headline":"一句话概括这位申请人（40字内）","fit":[{"label":"核对项","status":"满足|缺失|未提及|需确认","note":"依据"}],"questions":["电话沟通建议问的问题，1-3条"],"caution":"最需要注意的一个风险点，一句话"}`;
-  const userPrompt = `【申请信息】${JSON.stringify(detail.applicant)}\n【宠物与领养要求】${JSON.stringify(detail.pet)}`;
-
+  const secret = await resolveSecret();
   try {
-    const response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
-        stream: false,
-        temperature: 0.3,
-        max_tokens: 900,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ]
-      })
-    });
-    if (!response.ok) throw new Error(`模型返回 ${response.status}`);
-    const data = await response.json();
-    const parsed = JSON.parse(text(data?.choices?.[0]?.message?.content, 4000));
+    // 交给审核 Agent：它会自己决定要不要查该申请人的历史投递、该宠物的回访与竞争情况
+    const review = await runReviewAgent(detail, apiKey, secret);
+    const parsed = JSON.parse(text(review.content, 4000));
     if (!parsed?.headline) throw new Error('模型返回内容缺少必要字段');
     return {
       ok: true,
       mock: false,
       mode: '由 AI 生成',
+      steps: review.steps,
       summary: {
         headline: text(parsed.headline, 120),
-        fit: Array.isArray(parsed.fit)
-          ? parsed.fit.slice(0, 8).map(item => ({
-              label: text(item?.label, 40),
-              status: text(item?.status, 20),
-              note: text(item?.note, 200)
-            }))
-          : [],
+        fit: Array.isArray(parsed.fit) ? parsed.fit.slice(0, 8).map(item => ({
+          label: text(item?.label, 40), status: text(item?.status, 20), note: text(item?.note, 200)
+        })) : [],
         questions: Array.isArray(parsed.questions) ? parsed.questions.slice(0, 3).map(item => text(item, 200)) : [],
         caution: text(parsed.caution, 200)
       }
@@ -828,6 +1014,7 @@ async function summarizeApplication(event, context) {
       ok: true,
       mock: true,
       mode: `模型调用失败（${text(error.message, 80)}），以下为规则比对结果`,
+      steps: [],
       summary: {
         headline: fallbackHeadline,
         fit: ruleBasedFit(detail.applicant, detail.pet),

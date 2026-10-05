@@ -1672,6 +1672,13 @@ function renderApplicationSummary(container, result) {
       ${item.note ? `<span class="ai-fit-note">${escapeHtml(item.note)}</span>` : ''}
     </li>`).join('');
   const questions = (summary.questions || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  // 展示 AI 实际查了哪些东西：让管理员能判断结论的覆盖面，
+  // 也能看出"回答不准"是因为没查、还是资料本身缺失。
+  const steps = (result.steps || []).map(step => `
+    <li class="ai-step${step.ok === false ? ' is-failed' : ''}">
+      <span class="ai-step-mark">${step.ok === false ? '未完成' : '已查'}</span>
+      <span>${escapeHtml(step.label || step.tool || '')}${step.summary ? `：${escapeHtml(step.summary)}` : ''}</span>
+    </li>`).join('');
 
   container.hidden = false;
   container.innerHTML = `
@@ -1683,6 +1690,7 @@ function renderApplicationSummary(container, result) {
     ${fitRows ? `<ul class="ai-fit-list">${fitRows}</ul>` : ''}
     ${questions ? `<div class="ai-summary-block"><h5>建议电话里问</h5><ul>${questions}</ul></div>` : ''}
     ${summary.caution ? `<p class="ai-summary-caution">${escapeHtml(summary.caution)}</p>` : ''}
+    ${steps ? `<div class="ai-summary-block"><h5>AI 审核过程</h5><ul class="ai-step-list">${steps}</ul></div>` : ''}
     <p class="ai-summary-note">AI 只做信息整理与提示，是否通过由你来判断。</p>`;
 }
 async function handleApplicationSummarize(id, button) {
