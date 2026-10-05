@@ -97,7 +97,11 @@ class Canvas:
             self.draw.line([self._s(x1), self._s(y1), self._s(x2), self._s(y2)], fill=color, width=self._s(width))
         if head:
             angle = math.atan2(y2 - y1, x2 - x1)
-            for delta in (2.7, -2.7):
+            # Draw both sides of the head behind the endpoint.  The previous
+            # implementation used angles around 2.7 radians directly and put
+            # the two strokes beyond the target, which looked like a detached
+            # chevron instead of an arrowhead.
+            for delta in (-0.5, 0.5):
                 self.draw.line(
                     [self._s(x2), self._s(y2),
                      self._s(x2 - 9 * math.cos(angle + delta)), self._s(y2 - 9 * math.sin(angle + delta))],

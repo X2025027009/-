@@ -1,0 +1,228 @@
+- generic [ref=f1e1]:
+  - link "跳到主要内容" [ref=f1e2] [cursor=pointer]:
+    - /url: "#main"
+  - banner [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - link "成都猫狗小院首页" [ref=f1e5] [cursor=pointer]:
+        - /url: "#top"
+        - generic [ref=f1e11]:
+          - strong [ref=f1e12]: 成都猫狗小院
+          - generic [ref=f1e13]: 领养代替购买
+      - navigation "主导航" [ref=f1e14]:
+        - link "寻找伙伴" [ref=f1e15] [cursor=pointer]:
+          - /url: "#pets"
+        - link "AI 匹配" [ref=f1e16] [cursor=pointer]:
+          - /url: "#match"
+        - link "如何领养" [ref=f1e17] [cursor=pointer]:
+          - /url: "#how"
+        - link "回访档案" [ref=f1e18] [cursor=pointer]:
+          - /url: "#stories"
+        - link "关于小院" [ref=f1e19] [cursor=pointer]:
+          - /url: "#about"
+        - button "管理员入口" [ref=f1e20] [cursor=pointer]
+  - main [ref=f1e21]:
+    - generic [ref=f1e23]:
+      - generic [ref=f1e24]:
+        - paragraph [ref=f1e25]: 在成都，给它一个回家的理由
+        - heading "每一只小动物， 都值得被认真看见。" [level=1] [ref=f1e26]: 每一只小动物，都值得被认真看见。
+        - paragraph [ref=f1e27]: 成都猫狗小院为流浪猫狗提供临时的安全角落，也为愿意负责的你，留下一条认识它们的路。
+        - generic [ref=f1e28]:
+          - link "看看正在等家的它们" [ref=f1e29] [cursor=pointer]:
+            - /url: "#pets"
+            - text: 看看正在等家的它们
+            - generic [aria-hidden] [ref=f1e30]: →
+          - link "先了解领养流程" [ref=f1e31] [cursor=pointer]:
+            - /url: "#how"
+        - paragraph [ref=f1e32]: 照片和档案会持续更新。请先认识它，再决定带它回家。
+      - generic [ref=f1e33]:
+        - generic [ref=f1e34]:
+          - img "coco，猫咪照片" [ref=f1e245]
+          - generic [ref=f1e36]: 正在等家
+        - article [ref=f1e37]:
+          - generic [ref=f1e38]: 正在等家
+          - heading "coco · 约7岁" [level=2] [ref=f1e246]
+          - paragraph [ref=f1e42]: 一只猪
+          - button "认识coco" [ref=f1e247] [cursor=pointer]:
+            - text: 认识coco
+            - generic [aria-hidden] [ref=f1e248]: ↗
+    - region "小院概况" [ref=f1e46]:
+      - generic [ref=f1e47]:
+        - paragraph [ref=f1e48]: 这里不是宠物商品目录。每一份档案，都记录着一段正在发生的陪伴。
+        - generic [ref=f1e49]:
+          - generic [ref=f1e50]:
+            - strong [ref=f1e51]: "4"
+            - generic [ref=f1e52]: 正在等待合适的家
+          - generic [ref=f1e53]:
+            - strong [ref=f1e54]: "1"
+            - generic [ref=f1e55]: 已领养生活档案
+          - generic [ref=f1e56]:
+            - strong [ref=f1e57]: "0"
+            - generic [ref=f1e58]: 预约关注记录
+    - generic [ref=f1e60]:
+      - generic [ref=f1e61]:
+        - generic [ref=f1e62]:
+          - paragraph [ref=f1e63]: 从照片开始，慢慢认识它
+          - heading "小院里的等待" [level=2] [ref=f1e64]
+        - paragraph [ref=f1e65]: 你可以先按种类和状态筛选。合适的领养，从不急着决定开始。
+      - toolbar "筛选宠物" [ref=f1e66]:
+        - generic "按状态筛选" [ref=f1e67]:
+          - button "待领养" [pressed] [ref=f1e68] [cursor=pointer]
+          - button "已领养档案" [ref=f1e69] [cursor=pointer]
+          - button "暂不适合领养" [ref=f1e70] [cursor=pointer]
+        - generic "按种类筛选" [ref=f1e71]:
+          - button "全部" [pressed] [ref=f1e72] [cursor=pointer]
+          - button "猫咪" [ref=f1e73] [cursor=pointer]
+          - button "狗狗" [ref=f1e74] [cursor=pointer]
+      - generic [ref=f1e75]:
+        - article [ref=f1e76]:
+          - button "查看花卷的详情" [ref=f1e77] [cursor=pointer]:
+            - img "花卷，狗狗照片" [ref=f1e78]
+            - generic [ref=f1e79]: 待领养
+          - generic [ref=f1e80]:
+            - generic [ref=f1e81]:
+              - heading "花卷" [level=3] [ref=f1e82]
+              - generic [ref=f1e83]: 狗狗 · 母 · 约1岁
+            - paragraph [ref=f1e84]: 比熊，挑食，粘人
+            - generic [ref=f1e85]: 新档案
+            - button "申请领养" [ref=f1e87] [cursor=pointer]:
+              - text: 申请领养
+              - generic [aria-hidden] [ref=f1e88]: →
+        - article [ref=f1e89]:
+          - button "查看喜豆的详情" [ref=f1e90] [cursor=pointer]:
+            - img "喜豆，狗狗照片" [ref=f1e91]
+            - generic [ref=f1e92]: 待领养
+          - generic [ref=f1e93]:
+            - generic [ref=f1e94]:
+              - heading "喜豆" [level=3] [ref=f1e95]
+              - generic [ref=f1e96]: 狗狗 · 公 · 1
+            - paragraph [ref=f1e97]: 弟弟，亲人，活泼
+            - generic [ref=f1e98]: 新档案
+            - button "申请领养" [ref=f1e100] [cursor=pointer]:
+              - text: 申请领养
+              - generic [aria-hidden] [ref=f1e101]: →
+        - article [ref=f1e102]:
+          - button "查看旺仔的详情" [ref=f1e103] [cursor=pointer]:
+            - img "旺仔，狗狗照片" [ref=f1e104]
+            - generic [ref=f1e105]: 待领养
+          - generic [ref=f1e106]:
+            - generic [ref=f1e107]:
+              - heading "旺仔" [level=3] [ref=f1e108]
+              - generic [ref=f1e109]: 狗狗 · 公 · 约3岁
+            - paragraph [ref=f1e110]: 力气大，脾气爆
+            - generic [ref=f1e111]: 新档案
+            - button "申请领养" [ref=f1e113] [cursor=pointer]:
+              - text: 申请领养
+              - generic [aria-hidden] [ref=f1e114]: →
+        - article [ref=f1e115]:
+          - button "查看coco的详情" [ref=f1e116] [cursor=pointer]:
+            - img "coco，猫咪照片" [ref=f1e117]
+            - generic [ref=f1e118]: 待领养
+          - generic [ref=f1e119]:
+            - generic [ref=f1e120]:
+              - heading "coco" [level=3] [ref=f1e121]
+              - generic [ref=f1e122]: 猫咪 · 公 · 约7岁
+            - paragraph [ref=f1e123]: 一只猪
+            - generic [ref=f1e124]: 新档案
+            - button "申请领养" [ref=f1e126] [cursor=pointer]:
+              - text: 申请领养
+              - generic [aria-hidden] [ref=f1e127]: →
+    - generic [ref=f1e129]:
+      - generic [ref=f1e130]:
+        - generic [ref=f1e131]:
+          - paragraph [ref=f1e132]: 不确定哪一只更适合你
+          - heading "先聊一聊， 再决定申请谁" [level=2] [ref=f1e133]: 先聊一聊，再决定申请谁
+        - paragraph [ref=f1e134]: 说说你的居住情况、平时在不在家、家里人的想法。AI 会结合小院的在册档案给出建议，也会提醒你容易忽略的地方。
+      - generic [ref=f1e135]:
+        - generic "AI 领养匹配对话" [ref=f1e136]:
+          - generic [ref=f1e249]: 我想领养一只猫，我租房住，房东同意，白天家里有人。你觉得我适合哪只？
+          - generic [ref=f1e250]: 目前小院待领养的猫咪只有一只，叫 coco，公猫，约 7 岁，档案里标着过度肥胖，正在等家。 你的条件挺合适：房东同意解决了租房养宠最大的坎，白天家里有人，对老年猫是很大的加分——它年纪偏大、又偏胖，需要有人盯着饮食和活动。 不过有几点想提醒你：一是档案里写着需要家庭成员同意，你还没提过家人态度，最好先确认；二是封窗一定要做好，猫跳窗风险不分年龄；三是肥胖猫要控制喂食、慢慢增加运动，别急着减肥，最好先问兽医；四是它 7 岁了，未来医疗开销会逐渐变多，要有心理准备。另外小院的领养流程、费用和回访安排还没公布，建议直接联系小院确认。最终能不能领养，要小院和你沟通后决定。
+          - button "朗读这段回答" [ref=f1e252] [cursor=pointer]
+        - generic [ref=f1e143]:
+          - generic [ref=f1e144]: 描述你的情况
+          - textbox "描述你的情况" [active] [ref=f1e145]:
+            - /placeholder: 例如：我和家人一起住，白天有人在家，有养猫经验，想找一只性格温和的狗狗。
+          - generic [ref=f1e146]:
+            - button "继续提问" [ref=f1e253] [cursor=pointer]
+            - button "语音输入" [ref=f1e148] [cursor=pointer]:
+              - generic [aria-hidden] [ref=f1e149]: 🎤
+            - button "重新开始" [ref=f1e151] [cursor=pointer]
+        - generic [ref=f1e152]:
+          - generic [ref=f1e153]:
+            - generic [ref=f1e154]: 或者，用一张照片来找
+            - generic [ref=f1e155]: 照片只在你的浏览器里压缩后发去比对，不会保存到任何地方
+          - generic [ref=f1e156]: 选择一张照片
+        - paragraph [ref=f1e159]: AI 建议仅供参考，最终由小院与你沟通后决定。 请不要在这里填写身份证号、家庭住址等敏感信息。
+    - generic [ref=f1e161]:
+      - generic [ref=f1e162]:
+        - paragraph [ref=f1e163]: 领养是彼此靠近的开始
+        - heading "不需要匆忙， 但需要认真。" [level=2] [ref=f1e164]: 不需要匆忙，但需要认真。
+        - paragraph [ref=f1e165]: 我们希望每一次领养，都先从清楚、坦诚的沟通开始。提交申请不代表立刻带走，而是让我们一起确认：你和它是否真的适合彼此。
+        - link "阅读小院的领养原则" [ref=f1e166] [cursor=pointer]:
+          - /url: "#about"
+      - list [ref=f1e167]:
+        - listitem [ref=f1e168]:
+          - generic [ref=f1e169]: "01"
+          - generic [ref=f1e170]:
+            - strong [ref=f1e171]: 先看档案
+            - paragraph [ref=f1e172]: 了解它的性格、健康情况和日常习惯。
+        - listitem [ref=f1e173]:
+          - generic [ref=f1e174]: "02"
+          - generic [ref=f1e175]:
+            - strong [ref=f1e176]: 提交申请
+            - paragraph [ref=f1e177]: 留下真实信息，方便我们和你进一步沟通。
+        - listitem [ref=f1e178]:
+          - generic [ref=f1e179]: "03"
+          - generic [ref=f1e180]:
+            - strong [ref=f1e181]: 慢慢确认
+            - paragraph [ref=f1e182]: 沟通、见面、了解环境，再一起做出决定。
+        - listitem [ref=f1e183]:
+          - generic [ref=f1e184]: "04"
+          - generic [ref=f1e185]:
+            - strong [ref=f1e186]: 把陪伴继续下去
+            - paragraph [ref=f1e187]: 完成领养后，我们也期待收到你们的新生活照片。
+    - generic [ref=f1e189]:
+      - generic [ref=f1e190]:
+        - img "小黄，已领养生活档案照片" [ref=f1e191]
+        - generic [ref=f1e192]: 已领养档案 · 持续更新
+      - generic [ref=f1e193]:
+        - paragraph [ref=f1e194]: 回访不是打扰，是惦记
+        - heading "小黄的生活档案， 仍在继续。" [level=2] [ref=f1e195]: 小黄的生活档案，仍在继续。
+        - paragraph [ref=f1e196]: 可爱
+        - button "查看小黄的生活档案" [ref=f1e197] [cursor=pointer]:
+          - text: 查看小黄的生活档案
+          - generic [aria-hidden] [ref=f1e254]: →
+    - generic [ref=f1e200]:
+      - generic [ref=f1e201]:
+        - paragraph [ref=f1e202]: 关于成都猫狗小院
+        - heading "一个暂时的院子， 一条回家的路。" [level=2] [ref=f1e203]: 一个暂时的院子，一条回家的路。
+        - paragraph [ref=f1e204]: 我们是成都本地的私人流浪猫狗救助小院。这里不承诺替代专业机构，但会尽力为每一个来到院子里的生命，提供食物、医疗、安静的休息处，以及被好好介绍给新家庭的机会。
+        - figure:
+          - img "成都猫狗小院的合影：大家和院里的狗一起举着横幅，横幅上写着「反对虐杀动物 支持动保立法」「每个生命都值得被尊重」"
+      - complementary [ref=f1e205]:
+        - paragraph [ref=f1e209]: 想先聊一聊？
+        - heading "联系方式由小院管理员随时更新" [level=3] [ref=f1e210]
+        - generic [ref=f1e211]:
+          - generic [ref=f1e212]:
+            - term [ref=f1e213]: 所在区域
+            - definition [ref=f1e214]: 四川省成都市高新区
+          - generic [ref=f1e215]:
+            - term [ref=f1e216]: 咨询时间
+            - definition [ref=f1e217]: 建议提前预约
+          - generic [ref=f1e218]:
+            - term [ref=f1e219]: 联系电话
+            - definition [ref=f1e220]: "11921938123"
+          - generic [ref=f1e221]:
+            - term [ref=f1e222]: 微信咨询
+            - definition [ref=f1e223]: "139283923232"
+        - button "查看咨询方式" [ref=f1e224] [cursor=pointer]
+  - contentinfo [ref=f1e225]:
+    - generic [ref=f1e226]:
+      - link "成都猫狗小院 领养代替购买" [ref=f1e227] [cursor=pointer]:
+        - /url: "#top"
+        - generic [ref=f1e233]:
+          - strong [ref=f1e234]: 成都猫狗小院
+          - generic [ref=f1e235]: 领养代替购买
+      - paragraph [ref=f1e236]: 当前为示例网站原型，动物资料与联系方式均可由管理员在后台替换。
+      - generic [ref=f1e237]:
+        - button "修改我的申请" [ref=f1e238] [cursor=pointer]
+        - button "管理员入口" [ref=f1e239] [cursor=pointer]

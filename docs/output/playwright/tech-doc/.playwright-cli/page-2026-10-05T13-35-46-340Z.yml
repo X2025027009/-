@@ -1,0 +1,11 @@
+- generic [ref=e20]:
+  - generic [ref=e21]:
+    - generic [ref=e25]: 页面访问提示
+    - generic [ref=e26]: 当前域名 chuanzhibei-d3gvmowp1e63d7f33-1470251683.tcloudbaseapp.com 是由腾讯云 CloudBase 提供的测试域名，仅供开发测试使用，内容可能处于未审核状态请谨慎浏览，请勿泄露个人信息、账号密码或进行涉及财产的操作
+  - generic [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]: 环境ID：chuanzhibei-d3gvmowp1e63d7f33
+      - generic [ref=e30]: 页面路径：/
+    - link "我是开发者，如何去掉当前页面？" [ref=e32] [cursor=pointer]:
+      - /url: https://docs.cloudbase.net/service/alias#%E5%A6%82%E4%BD%95%E7%A7%BB%E9%99%A4%E4%B8%AD%E9%97%B4%E9%A1%B5
+  - button "确定访问 (3s)" [disabled] [ref=e34]
