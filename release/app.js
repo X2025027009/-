@@ -2589,7 +2589,16 @@ async function handlePhotoSearch(file) {
     const result = await response.json().catch(() => null);
     if (!result) throw new Error(`服务返回无法解析的内容（${response.status}）。`);
     if (result.ok !== true) throw new Error(result.message || '比对失败。');
+    // 建索引时单张失败不影响整体，但要让用户知道有几张没成功，
+    // 否则"结果少了"会被当成模型不准
+    const failed = Array.isArray(result.failures) ? result.failures : [];
     renderPhotoMatches(container, result);
+    if (failed.length) {
+      const note = document.createElement('p');
+      note.className = 'match-photo-hint';
+      note.textContent = `有 ${failed.length} 张宠物照片没能建立索引，本次比对未包含它们：${failed.slice(0, 2).join('；')}`;
+      container.appendChild(note);
+    }
   } catch (error) {
     if (container) {
       container.hidden = false;

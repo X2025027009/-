@@ -30,7 +30,7 @@ const MAX_PHOTOS = 40;
 /** 低于这个相似度不作为结果返回。 */
 const MIN_SIMILARITY = 0.5;
 /** 只允许这些域名，防止服务端被指使去抓任意地址。 */
-const ALLOWED_HOST = /(^|\.)(tcb\.qcloud\.la|myqcloud\.com|tcloudbaseapp\.com)$/i;
+const ALLOWED_HOST = /(^|\.)(tcloudbasegateway\.com|tcb\.qcloud\.la|myqcloud\.com|tcloudbaseapp\.com)$/i;
 
 function clip(value, max) {
   return String(value ?? '').trim().slice(0, max);
@@ -42,10 +42,27 @@ function quote(value) {
 function halfvecLiteral(values) {
   return `'[${values.map(v => (Number.isFinite(v) ? Number(v.toFixed(5)) : 0)).join(',')}]'::halfvec`;
 }
-function isAllowedUrl(url) {
+/**
+ * 只允许本站云存储的地址，防止服务端被指使去抓任意 URL。
+ *
+ * 域名来自实测：CloudBase 存储现在通过网关下发，
+ * 实际域名是 `{envId}.api.tcloudbasegateway.com`
+ * （旧的 `tcb.qcloud.la` 无签名访问返回 418，已不是当前入口）。
+ *
+ * 光有域名白名单还不够：攻击者可以拿一个真实存在的 storage_path
+ * 配一个指向别处的网关地址。因此再加一道——**地址路径必须包含该 storage_path**，
+ * 这样服务端只可能抓到它自己那张照片。
+ */
+function isAllowedUrl(url, storagePath) {
   try {
     const parsed = new URL(String(url));
-    return parsed.protocol === 'https:' && ALLOWED_HOST.test(parsed.hostname);
+    if (parsed.protocol !== 'https:') return false;
+    if (!ALLOWED_HOST.test(parsed.hostname)) return false;
+    if (storagePath) {
+      const path = decodeURIComponent(parsed.pathname);
+      if (!path.includes(String(storagePath))) return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -77,12 +94,12 @@ function createVision({ query, embedImage }) {
     const diagnostics = {
       received: raw.length,
       missingPath: shaped.filter(item => !item.path).length,
-      rejectedUrl: shaped.filter(item => item.path && !isAllowedUrl(item.url)).length,
+      rejectedUrl: shaped.filter(item => item.path && !isAllowedUrl(item.url, item.path)).length,
       hosts
     };
 
     const candidates = shaped
-      .filter(item => item.path && item.petId && isAllowedUrl(item.url))
+      .filter(item => item.path && item.petId && isAllowedUrl(item.url, item.path))
       .slice(0, MAX_PHOTOS);
     if (!candidates.length) return { valid: [], diagnostics };
 
