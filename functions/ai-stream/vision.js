@@ -60,29 +60,51 @@ function isAllowedUrl(url) {
 function createVision({ query, embedImage }) {
   /** 校验 storage_path 确实属于本站的宠物照片，避免被塞入任意路径。 */
   async function filterKnownPaths(photos) {
-    const candidates = (photos || [])
+    const raw = Array.isArray(photos) ? photos : [];
+    const shaped = raw
       .map(item => ({
         path: clip(item?.path, 300),
         url: clip(item?.url, 2000),
         petId: clip(item?.petId, 80),
         petName: clip(item?.petName, 40),
         isCover: item?.isCover === true
-      }))
+      }));
+    // 诊断信息：出错时把"卡在哪一步"说清楚，而不是只回一句笼统的失败。
+    // 只记录域名，不记录完整地址（签名有效期很短，也没必要外传）。
+    const hosts = [...new Set(shaped.map(item => {
+      try { return new URL(item.url).hostname; } catch { return ''; }
+    }).filter(Boolean))].slice(0, 4);
+    const diagnostics = {
+      received: raw.length,
+      missingPath: shaped.filter(item => !item.path).length,
+      rejectedUrl: shaped.filter(item => item.path && !isAllowedUrl(item.url)).length,
+      hosts
+    };
+
+    const candidates = shaped
       .filter(item => item.path && item.petId && isAllowedUrl(item.url))
       .slice(0, MAX_PHOTOS);
-    if (!candidates.length) return [];
+    if (!candidates.length) return { valid: [], diagnostics };
+
     const known = await query(
       `SELECT jsonb_build_object('paths', COALESCE(jsonb_agg(storage_path), '[]'::jsonb)) AS result
        FROM public.pet_media WHERE storage_path IN (${candidates.map(item => quote(item.path)).join(',')})`
     );
     const allowed = new Set(Array.isArray(known?.paths) ? known.paths : []);
-    return candidates.filter(item => allowed.has(item.path));
+    const valid = candidates.filter(item => allowed.has(item.path));
+    diagnostics.unknownPath = candidates.length - valid.length;
+    return { valid, diagnostics };
   }
 
   /** 给尚未建索引的宠物照片补上向量。单张失败不影响其它张。 */
   async function ensureIndexed(photos) {
-    const valid = await filterKnownPaths(photos);
-    if (!valid.length) return { ok: false, message: '没有可用的宠物照片（地址无效或不属于本站存储）。' };
+    const { valid, diagnostics } = await filterKnownPaths(photos);
+    if (!valid.length) {
+      const why = diagnostics.received === 0
+        ? '前端没有传任何宠物照片（可能宠物资料还没加载完）'
+        : `收到 ${diagnostics.received} 张，其中地址被拒 ${diagnostics.rejectedUrl} 张、路径不存在 ${diagnostics.unknownPath ?? 0} 张；域名：${diagnostics.hosts.join('、') || '无法解析'}`;
+      return { ok: false, message: `没有可用的宠物照片 —— ${why}` };
+    }
 
     const cached = await query(
       `SELECT jsonb_build_object('paths', COALESCE(jsonb_agg(storage_path), '[]'::jsonb)) AS result
