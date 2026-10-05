@@ -199,8 +199,8 @@ for (const [dir, why] of clutter) {
 const big = tracked.map(file => {
   const full = path.join(ROOT, file);
   return fs.existsSync(full) ? { file, size: fs.statSync(full).size } : null;
-}).filter(Boolean).filter(item => item.size > 2 * 1024 * 1024).sort((a, b) => b.size - a.size);
-check('没有超过 2 MB 的文件', big.length === 0, big.slice(0, 3).map(item => `${item.file} ${(item.size / 1048576).toFixed(1)}MB`).join('；'));
+}).filter(Boolean).filter(item => item.size > 12 * 1024 * 1024).sort((a, b) => b.size - a.size);
+check('没有超过 12 MB 的文件（文档类交付物本身较大）', big.length === 0, big.slice(0, 3).map(item => `${item.file} ${(item.size / 1048576).toFixed(1)}MB`).join('；'));
 
 // 检查三个发布文件都在，而不是数总数——assets/ 下还会有图片等素材
 const releaseMissing = ['app.js', 'index.html', 'styles.css'].filter(f => !tracked.includes(`release/${f}`));

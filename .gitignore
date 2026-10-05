@@ -1,4 +1,7 @@
 # 本地依赖和临时文件
+docs/build/
+docs/output/
+tmp/
 __pycache__/
 *.pyc
 .commitmsg
