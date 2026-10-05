@@ -202,7 +202,13 @@ const big = tracked.map(file => {
 }).filter(Boolean).filter(item => item.size > 2 * 1024 * 1024).sort((a, b) => b.size - a.size);
 check('没有超过 2 MB 的文件', big.length === 0, big.slice(0, 3).map(item => `${item.file} ${(item.size / 1048576).toFixed(1)}MB`).join('；'));
 
-check('release/ 发布源存在', tracked.filter(f => f.startsWith('release/')).length === 3, `实际 ${tracked.filter(f => f.startsWith('release/')).length} 个`);
+// 检查三个发布文件都在，而不是数总数——assets/ 下还会有图片等素材
+const releaseMissing = ['app.js', 'index.html', 'styles.css'].filter(f => !tracked.includes(`release/${f}`));
+check('release/ 三个发布文件齐全', releaseMissing.length === 0, releaseMissing.join('、'));
+const releaseAssets = tracked.filter(f => f.startsWith('release/assets/'));
+const rootAssets = tracked.filter(f => f.startsWith('assets/'));
+check('assets/ 素材已同步到 release/', releaseAssets.length === rootAssets.length,
+  `根目录 ${rootAssets.length} 个，release ${releaseAssets.length} 个`);
 
 console.log(`\n===== 通过 ${passed} 项，失败 ${failed} 项，提醒 ${warned} 项 =====`);
 if (failed) console.log('\n有失败项，提交前请先处理。');
